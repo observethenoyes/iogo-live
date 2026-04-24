@@ -1,65 +1,79 @@
-import Image from "next/image";
+import Dashboard from "@/components/dashboard/Dashboard";
+import { buildDailySummary } from "@/lib/calculator/calculate-daily";
+import { todayUkDate, ukLocalDayLabel, ukDayStart } from "@/lib/calculator/timezone";
+import { resolveCredentials } from "@/lib/dal";
+import { supabaseConfigured, octopusEnv, envToCredentials } from "@/lib/env";
+import { getAgreementEndDate } from "@/lib/octopus/rest-client";
+import { calculateTariffComparison } from "@/lib/octopus/tariff-comparison";
 
-export default function Home() {
+// "Today" depends on the wall clock, and the upstream Octopus calls require
+// secrets only available at request time, so this page must not be prerendered
+// at build time. The fetch() calls inside the Octopus client still cache the
+// upstream responses via next: { revalidate }, so each request is cheap.
+export const dynamic = "force-dynamic";
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const VALID_RANGES = new Set(["live", "daily", "weekly", "monthly", "yearly"]);
+
+export default async function Home({
+  searchParams,
+}: {
+  // Next 16: searchParams is a Promise.
+  searchParams: Promise<{ date?: string | string[]; range?: string | string[] }>;
+}) {
+  const params = await searchParams;
+  const today = todayUkDate();
+
+  // Validate `?date=YYYY-MM-DD`. Anything malformed, in the future, or missing
+  // falls back to today — we don't want a typo'd URL to crash the page.
+  const raw = Array.isArray(params.date) ? params.date[0] : params.date;
+  const date =
+    raw && DATE_RE.test(raw) && raw <= today ? raw : today;
+
+  // Optional `?range=live|daily|weekly|monthly|yearly` — lets Live navigate
+  // back to today while preserving the selected range across the page load.
+  const rawRange = Array.isArray(params.range) ? params.range[0] : params.range;
+  const initialRange = rawRange && VALID_RANGES.has(rawRange) ? rawRange : undefined;
+
+  // Resolve credentials: Supabase (multi-user) or env vars (self-hosted).
+  let creds;
+  if (supabaseConfigured()) {
+    const resolved = await resolveCredentials();
+    creds = resolved.creds;
+  } else {
+    const env = octopusEnv();
+    if (!env) {
+      // No env vars and no Supabase — show setup instructions.
+      throw new Error(
+        "Missing required environment variables. Visit /setup to discover your Octopus account details."
+      );
+    }
+    creds = envToCredentials(env);
+  }
+
+  const dailySummary = await buildDailySummary({ creds, date });
+  const dateLabel = ukLocalDayLabel(ukDayStart(date));
+
+  // Fetch agreement end date + tariff comparison in parallel.
+  const [agreementEndDate, tariffComparison] = await Promise.all([
+    getAgreementEndDate(creds).catch(() => null),
+    calculateTariffComparison(
+      creds,
+      dailySummary.slots,
+      dailySummary.standingChargePence
+    ).catch(() => null),
+  ]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <Dashboard
+      dailySummary={dailySummary}
+      dateLabel={dateLabel}
+      currentDate={date}
+      todayDate={today}
+      initialRange={initialRange as "live" | "daily" | "weekly" | "monthly" | "yearly" | undefined}
+      agreementEndDate={agreementEndDate}
+      tariffComparison={tariffComparison}
+    />
   );
 }
