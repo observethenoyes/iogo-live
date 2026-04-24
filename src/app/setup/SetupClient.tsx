@@ -220,20 +220,36 @@ function AccountOverview({
   >("idle");
   const [saveErrorMsg, setSaveErrorMsg] = useState("");
 
+  function parseOverride(raw: string): number | null {
+    if (!raw) return null;
+    const n = parseFloat(raw);
+    if (!Number.isFinite(n) || n < 0 || n > 1000) return null;
+    return n;
+  }
+
   function handleSaveOverrides() {
     setSaveStatus("idle");
     startSave(async () => {
       if (isSupabase) {
+        const peak = overridesEnabled ? parseOverride(peakOverride) : null;
+        const offPeak = overridesEnabled ? parseOverride(offPeakOverride) : null;
+        const standing = overridesEnabled
+          ? parseOverride(standingOverride)
+          : null;
+        if (
+          overridesEnabled &&
+          ((peakOverride && peak === null) ||
+            (offPeakOverride && offPeak === null) ||
+            (standingOverride && standing === null))
+        ) {
+          setSaveStatus("error");
+          setSaveErrorMsg("Override values must be between 0 and 1000 pence.");
+          return;
+        }
         const res = await saveRateOverrides({
-          peakRateOverride: overridesEnabled && peakOverride
-            ? parseFloat(peakOverride)
-            : null,
-          offPeakRateOverride: overridesEnabled && offPeakOverride
-            ? parseFloat(offPeakOverride)
-            : null,
-          standingChargeOverride: overridesEnabled && standingOverride
-            ? parseFloat(standingOverride)
-            : null,
+          peakRateOverride: peak,
+          offPeakRateOverride: offPeak,
+          standingChargeOverride: standing,
         });
         if (res?.error) {
           setSaveStatus("error");

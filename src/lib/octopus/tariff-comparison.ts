@@ -46,7 +46,10 @@ async function findComparisonProducts(): Promise<ComparisonProducts> {
   try {
     const res = await fetch(
       `${BASE}/products/?brand=OCTOPUS_ENERGY&is_variable=true&is_business=false`,
-      { next: { revalidate: PRODUCT_CACHE_TTL } }
+      {
+        next: { revalidate: PRODUCT_CACHE_TTL },
+        signal: AbortSignal.timeout(10_000),
+      }
     );
     if (!res.ok) return { flexible: null, agile: null };
     const data = (await res.json()) as ProductsResponse;
@@ -119,6 +122,7 @@ async function fetchRates(
     while (fetchUrl && pages < 10) {
       const res = await fetch(fetchUrl, {
         next: { revalidate: RATE_CACHE_TTL },
+        signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) return [];
       const data = (await res.json()) as RateResponse;

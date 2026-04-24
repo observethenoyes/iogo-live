@@ -55,6 +55,7 @@ async function octopusFetch<T>(
       revalidate: opts.revalidate,
       ...(opts.tags ? { tags: opts.tags } : {}),
     },
+    signal: AbortSignal.timeout(10_000),
   });
 
   if (!res.ok) {

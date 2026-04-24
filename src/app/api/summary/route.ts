@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { buildDailySummary } from "@/lib/calculator/calculate-daily";
 import {
   buildWeeklySummary,
@@ -7,41 +8,44 @@ import {
 } from "@/lib/calculator/calculate-range";
 import { todayUkDate } from "@/lib/calculator/timezone";
 import { OctopusError } from "@/lib/octopus/rest-client";
-import { verifySession, getUserCredentials } from "@/lib/dal";
+import { getSession, getUserCredentials } from "@/lib/dal";
 import { supabaseConfigured, octopusEnv, envToCredentials } from "@/lib/env";
 import type { OctopusCredentials } from "@/lib/octopus/types";
 
 export const dynamic = "force-dynamic";
 
-const VALID_RANGES = new Set(["daily", "weekly", "monthly", "yearly"]);
+const QuerySchema = z.object({
+  range: z.enum(["daily", "weekly", "monthly", "yearly"]).default("daily"),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+});
 
 // GET /api/summary?range=daily&date=YYYY-MM-DD
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const range = url.searchParams.get("range") ?? "daily";
-  const date = url.searchParams.get("date") ?? todayUkDate();
-
-  if (!VALID_RANGES.has(range)) {
+  const parsed = QuerySchema.safeParse({
+    range: url.searchParams.get("range") ?? undefined,
+    date: url.searchParams.get("date") ?? undefined,
+  });
+  if (!parsed.success) {
     return NextResponse.json(
-      { error: `range "${range}" is not supported` },
+      { error: "Invalid `range` or `date` parameter." },
       { status: 400 }
     );
   }
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return NextResponse.json(
-      { error: `date must be YYYY-MM-DD, got "${date}"` },
-      { status: 400 }
-    );
-  }
+  const { range } = parsed.data;
+  const date = parsed.data.date ?? todayUkDate();
 
   // Resolve credentials: Supabase (multi-user) or env vars (self-hosted).
   let creds: OctopusCredentials;
   if (supabaseConfigured()) {
-    const { userId } = await verifySession();
-    // In API routes verifySession redirects on failure which throws a
-    // Next.js redirect — let it bubble up.
-    const userCreds = await getUserCredentials(userId);
+    const session = await getSession();
+    if (!session) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    }
+    const userCreds = await getUserCredentials(session.userId);
     if (!userCreds) {
       return NextResponse.json(
         { error: "No Octopus credentials configured. Visit /setup first." },
@@ -84,7 +88,10 @@ export async function GET(request: Request) {
         { status: 502 }
       );
     }
-    const message = err instanceof Error ? err.message : "unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("[api/summary] unhandled error:", err);
+    return NextResponse.json(
+      { error: "Internal server error" },
+      { status: 500 }
+    );
   }
 }

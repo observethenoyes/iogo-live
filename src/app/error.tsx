@@ -37,10 +37,10 @@ export default function Error({
           <h1 className="text-lg font-semibold text-foreground">{heading}</h1>
         </div>
         <p className="mb-4 text-sm text-muted-foreground">{description}</p>
-        {!isMissingEnv && (
-          <pre className="mb-5 max-h-48 overflow-auto rounded-xl border border-white/[0.06] bg-black/30 p-3 text-xs text-muted-foreground">
-            {error.message}
-          </pre>
+        {!isMissingEnv && error.digest && (
+          <p className="mb-5 font-mono text-xs text-muted-foreground">
+            Reference: {error.digest}
+          </p>
         )}
         <div className="flex flex-wrap items-center gap-2">
           {isMissingEnv && (
