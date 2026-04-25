@@ -305,6 +305,8 @@ The dashboard specifically targets IOG's rate structure (off-peak window, dispat
 
 In **self-hosted mode**, your API key lives in `.env.local` on your server and is only used for server-side API calls. It never reaches the browser.
 
+> **Heads-up on self-hosted mode:** when no Supabase is configured, the app treats every visitor as a single implicit user and does **not** require login. Only expose a self-hosted instance on a network you control (localhost, home LAN, or behind your own VPN/reverse-proxy auth). To deploy publicly, set `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_ENCRYPTION_KEY` to enable multi-user auth.
+
 In **multi-user mode**, API keys are encrypted with AES-256-GCM before being stored in Supabase. The encryption key only exists in your server's environment variables. Even a full database breach wouldn't expose plaintext API keys.
 
 </details>

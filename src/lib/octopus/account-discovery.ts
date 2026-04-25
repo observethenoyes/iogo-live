@@ -173,6 +173,7 @@ async function meterHasReadings(
     const res = await fetch(url, {
       headers: { Authorization: authHeader, Accept: "application/json" },
       cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return false;
     const data = (await res.json().catch(() => null)) as
@@ -237,6 +238,7 @@ async function fetchRatesFor(
       const res = await fetch(url, {
         headers: { Authorization: authHeader, Accept: "application/json" },
         cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) return null;
       return (await res.json().catch(() => null)) as T | null;
@@ -347,6 +349,7 @@ export async function discoverAccount({
       // This endpoint must never be cached — the whole point of the setup
       // flow is to see the current state of the account.
       cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
     throw new DiscoveryError(

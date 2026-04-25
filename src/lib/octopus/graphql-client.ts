@@ -13,9 +13,25 @@ interface CachedToken {
   expiresAt: number;
 }
 
-// Per-user token cache, keyed by API key.
+// Per-user token cache, keyed by API key. LRU-capped so a long-running
+// process with many distinct users can't grow it without bound.
+const TOKEN_CACHE_MAX = 500;
 const tokenCache = new Map<string, CachedToken>();
 const inflightTokens = new Map<string, Promise<string>>();
+
+function setWithLru<V>(map: Map<string, V>, key: string, value: V, max: number) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  while (map.size > max) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) break;
+    map.delete(oldest);
+  }
+}
+
+function invalidateToken(apiKey: string) {
+  tokenCache.delete(apiKey);
+}
 
 class KrakenAuthError extends Error {
   constructor(message: string) {
@@ -27,6 +43,13 @@ class KrakenAuthError extends Error {
 interface GraphQLResponse<T> {
   data?: T;
   errors?: Array<{ message: string; path?: string[] }>;
+}
+
+class KrakenTokenExpiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "KrakenTokenExpiredError";
+  }
 }
 
 async function gqlFetch<T>(
@@ -45,20 +68,51 @@ async function gqlFetch<T>(
     headers,
     body: JSON.stringify({ query, variables }),
     cache: "no-store",
+    signal: AbortSignal.timeout(10_000),
   });
 
+  if (res.status === 401 || res.status === 403) {
+    throw new KrakenTokenExpiredError(`Kraken GraphQL HTTP ${res.status}`);
+  }
   if (!res.ok) {
     throw new Error(`Kraken GraphQL HTTP ${res.status} ${res.statusText}`);
   }
 
   const body = (await res.json()) as GraphQLResponse<T>;
   if (body.errors && body.errors.length > 0) {
-    throw new Error(`Kraken GraphQL error: ${body.errors.map((e) => e.message).join("; ")}`);
+    const msg = body.errors.map((e) => e.message).join("; ");
+    if (/auth|token|unauthori[sz]ed|jwt/i.test(msg)) {
+      throw new KrakenTokenExpiredError(`Kraken GraphQL auth error: ${msg}`);
+    }
+    throw new Error(`Kraken GraphQL error: ${msg}`);
   }
   if (!body.data) {
     throw new Error("Kraken GraphQL returned no data");
   }
   return body.data;
+}
+
+/**
+ * Run a GraphQL query with automatic one-shot retry on token expiry. Handles
+ * the common case where a cached JWT has been revoked or expired before our
+ * TTL estimate.
+ */
+async function gqlWithRetry<T>(
+  creds: OctopusCredentials,
+  query: string,
+  variables: Record<string, unknown>
+): Promise<T> {
+  const token = await getToken(creds);
+  try {
+    return await gqlFetch<T>(query, variables, token);
+  } catch (err) {
+    if (err instanceof KrakenTokenExpiredError) {
+      invalidateToken(creds.apiKey);
+      const fresh = await getToken(creds);
+      return await gqlFetch<T>(query, variables, fresh);
+    }
+    throw err;
+  }
 }
 
 interface ObtainTokenData {
@@ -88,12 +142,19 @@ async function getToken(creds: OctopusCredentials): Promise<string> {
 
   const promise = fetchToken(creds)
     .then((token) => {
-      tokenCache.set(cacheKey, { token, expiresAt: Date.now() + TOKEN_TTL_MS });
+      setWithLru(
+        tokenCache,
+        cacheKey,
+        { token, expiresAt: Date.now() + TOKEN_TTL_MS },
+        TOKEN_CACHE_MAX
+      );
       return token;
     })
     .catch((err) => {
       tokenCache.delete(cacheKey);
-      throw new KrakenAuthError(`Kraken auth failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new KrakenAuthError(
+        `Kraken auth failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     })
     .finally(() => {
       inflightTokens.delete(cacheKey);
@@ -142,25 +203,26 @@ async function getChargePointDeviceId(
   const cached = chargePointIdCache.get(creds.accountNumber);
   if (cached && cached.expiresAt > now) return cached.deviceId;
 
-  const token = await getToken(creds);
-  const data = await gqlFetch<DevicesListData>(
+  const data = await gqlWithRetry<DevicesListData>(
+    creds,
     `query Devices($accountNumber: String!) {
        devices(accountNumber: $accountNumber) {
          __typename
          id
        }
      }`,
-    { accountNumber: creds.accountNumber },
-    token
+    { accountNumber: creds.accountNumber }
   );
 
   const chargePoint =
     data.devices?.find((d) => d.__typename === "SmartFlexChargePoint") ?? null;
   const deviceId = chargePoint?.id ?? null;
-  chargePointIdCache.set(creds.accountNumber, {
-    deviceId,
-    expiresAt: Date.now() + DEVICE_ID_TTL_MS,
-  });
+  setWithLru(
+    chargePointIdCache,
+    creds.accountNumber,
+    { deviceId, expiresAt: Date.now() + DEVICE_ID_TTL_MS },
+    TOKEN_CACHE_MAX
+  );
   return deviceId;
 }
 
@@ -202,12 +264,11 @@ async function getChargingSessionEnvelopes(
     const deviceId = await getChargePointDeviceId(creds);
     if (!deviceId) return { dispatches: [], chargingSessions: [], error: null };
 
-    const token = await getToken(creds);
-
     const before = new Date(rangeEnd.getTime() + 24 * HOUR_MS).toISOString();
     const after = new Date(rangeStart.getTime() - 24 * HOUR_MS).toISOString();
 
-    const data = await gqlFetch<ChargingSessionsData>(
+    const data = await gqlWithRetry<ChargingSessionsData>(
+      creds,
       `query ChargingSessions($accountNumber: String!, $deviceId: String!, $after: DateTime!, $before: DateTime!) {
          devices(accountNumber: $accountNumber, deviceId: $deviceId) {
            ... on SmartFlexChargePoint {
@@ -225,8 +286,7 @@ async function getChargingSessionEnvelopes(
         deviceId,
         after,
         before,
-      },
-      token
+      }
     );
 
     const edges = data.devices?.[0]?.chargingSessions?.edges ?? [];
@@ -264,14 +324,13 @@ async function getLiveDispatches(
   rangeEnd: Date
 ): Promise<{ dispatches: DispatchInterval[]; error: string | null }> {
   try {
-    const token = await getToken(creds);
-    const data = await gqlFetch<DispatchesData>(
+    const data = await gqlWithRetry<DispatchesData>(
+      creds,
       `query Dispatches($accountNumber: String!) {
          plannedDispatches(accountNumber: $accountNumber)  { start end }
          completedDispatches(accountNumber: $accountNumber) { start end }
        }`,
-      { accountNumber: creds.accountNumber },
-      token
+      { accountNumber: creds.accountNumber }
     );
 
     const rs = rangeStart.getTime();
@@ -380,8 +439,8 @@ async function getSmartMeterDeviceId(
   const cached = deviceIdCache.get(creds.accountNumber);
   if (cached && cached.expiresAt > now) return cached.deviceId;
 
-  const token = await getToken(creds);
-  const data = await gqlFetch<AccountDevicesData>(
+  const data = await gqlWithRetry<AccountDevicesData>(
+    creds,
     `query AccountDevices($accountNumber: String!) {
        account(accountNumber: $accountNumber) {
          properties {
@@ -395,8 +454,7 @@ async function getSmartMeterDeviceId(
          }
        }
      }`,
-    { accountNumber: creds.accountNumber },
-    token
+    { accountNumber: creds.accountNumber }
   );
 
   for (const p of data.account?.properties ?? []) {
@@ -404,10 +462,15 @@ async function getSmartMeterDeviceId(
       for (const m of emp.meters ?? []) {
         for (const d of m.smartDevices ?? []) {
           if (d.type === "ESME") {
-            deviceIdCache.set(creds.accountNumber, {
-              deviceId: d.deviceId,
-              expiresAt: Date.now() + DEVICE_ID_TTL_MS,
-            });
+            setWithLru(
+              deviceIdCache,
+              creds.accountNumber,
+              {
+                deviceId: d.deviceId,
+                expiresAt: Date.now() + DEVICE_ID_TTL_MS,
+              },
+              TOKEN_CACHE_MAX
+            );
             return d.deviceId;
           }
         }
@@ -438,8 +501,8 @@ export async function getTodayTelemetry(
 ): Promise<{ readings: ConsumptionReading[]; error: string | null }> {
   try {
     const deviceId = await getSmartMeterDeviceId(creds);
-    const token = await getToken(creds);
-    const data = await gqlFetch<SmartTelemetryData>(
+    const data = await gqlWithRetry<SmartTelemetryData>(
+      creds,
       `query Telemetry($deviceId: String!, $start: DateTime!, $end: DateTime!) {
          smartMeterTelemetry(deviceId: $deviceId, start: $start, end: $end, grouping: HALF_HOURLY) {
            readAt
@@ -450,8 +513,7 @@ export async function getTodayTelemetry(
         deviceId,
         start: rangeStart.toISOString(),
         end: rangeEnd.toISOString(),
-      },
-      token
+      }
     );
 
     const nodes = data.smartMeterTelemetry ?? [];

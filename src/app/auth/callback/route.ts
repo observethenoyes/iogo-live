@@ -4,7 +4,12 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
-  const next = url.searchParams.get("next") ?? "/";
+  const rawNext = url.searchParams.get("next") ?? "/";
+  // Reject absolute URLs and protocol-relative paths so `next` can never
+  // redirect off-origin. `new URL("https://evil", origin)` does NOT stay on
+  // origin — the base is ignored when the first arg is absolute.
+  const next =
+    rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
 
   if (code) {
     const supabase = await createSupabaseServerClient();

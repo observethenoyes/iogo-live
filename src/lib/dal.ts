@@ -7,33 +7,36 @@ import { decrypt } from "@/lib/crypto";
 import { octopusEnv, envToCredentials, supabaseConfigured } from "@/lib/env";
 import type { OctopusCredentials } from "@/lib/octopus/types";
 
+export type Session = { userId: string; email: string | null };
+
 /**
- * Verify the current user session. In self-hosted mode (no Supabase) this is a
- * no-op that returns a synthetic session. In multi-user mode it validates the
- * Supabase JWT and redirects to /login if invalid.
- *
- * Memoized with React `cache()` so repeated calls in the same request are free.
+ * Read the current session without redirecting on failure. Use from API
+ * routes so they can return a 401 JSON response instead of a 307.
  */
-export const verifySession = cache(
-  async (): Promise<{ userId: string; email: string | null }> => {
-    if (!supabaseConfigured()) {
-      // Self-hosted mode — no auth, single implicit user.
-      return { userId: "self-hosted", email: null };
-    }
-
-    const supabase = await createSupabaseServerClient();
-    const {
-      data: { user },
-      error,
-    } = await supabase.auth.getUser();
-
-    if (error || !user) {
-      redirect("/login");
-    }
-
-    return { userId: user.id, email: user.email ?? null };
+export const getSession = cache(async (): Promise<Session | null> => {
+  if (!supabaseConfigured()) {
+    return { userId: "self-hosted", email: null };
   }
-);
+
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+
+  if (error || !user) return null;
+  return { userId: user.id, email: user.email ?? null };
+});
+
+/**
+ * Verify the current user session. Redirects to /login if invalid — use from
+ * Server Components and page routes, never from API routes.
+ */
+export async function verifySession(): Promise<Session> {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  return session;
+}
 
 /**
  * Fetch and decrypt the Octopus credentials for a given user. Returns `null` if

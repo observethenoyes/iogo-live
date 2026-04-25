@@ -99,7 +99,7 @@ export default function TariffComparison({
         })()}
 
         {/* Agile */}
-        {data.agile && (() => {
+        {data.agile ? (() => {
           const agileTotal = data.agile.costPence + data.standingChargePence;
           const pct = pctDiff(iogTotal, agileTotal);
           return (
@@ -118,7 +118,17 @@ export default function TariffComparison({
               </p>
             </div>
           );
-        })()}
+        })() : (
+          <div className="rounded-lg border border-dashed border-white/[0.06] bg-black/10 px-3 py-2.5">
+            <p className="text-xs font-medium text-muted-foreground">
+              Agile Octopus
+            </p>
+            <p className="mt-1 text-[11px] text-muted-foreground/70">
+              Not available — Octopus hasn&apos;t published Agile rates for
+              your region on this date, or coverage was incomplete.
+            </p>
+          </div>
+        )}
       </div>
 
       <p className="mt-3 text-[10px] text-muted-foreground/60">
