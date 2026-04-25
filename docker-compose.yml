@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
-    env_file:
-      - .env.local
+    # env_file:
+    #   - .env.local
     # Or set env vars directly:
     # environment:
     #   OCTOPUS_API_KEY: sk_live_xxxxxxxxxxxxxxxxxxxx
