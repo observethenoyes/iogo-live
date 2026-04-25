@@ -1,7 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { PlugZap, Clock, Check, CalendarClock } from "lucide-react";
 import type { DispatchEvent } from "@/lib/mock-data";
+
+const COLLAPSED_LIMIT = 4;
 
 function formatDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);
@@ -13,9 +16,20 @@ function formatDuration(minutes: number): string {
 
 export default function DispatchTimeline({
   dispatches,
+  collapsible = false,
 }: {
   dispatches: DispatchEvent[];
+  /** When true and there are more than 4 dispatches, render only the first
+   *  4 with a "Show all" disclosure. Used by weekly/monthly range views. */
+  collapsible?: boolean;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const shouldCollapse =
+    collapsible && !expanded && dispatches.length > COLLAPSED_LIMIT;
+  const visible = shouldCollapse
+    ? dispatches.slice(0, COLLAPSED_LIMIT)
+    : dispatches;
+  const hidden = dispatches.length - visible.length;
   return (
     <div
       className="glass-card animate-fade-up rounded-2xl p-4 md:p-6"
@@ -35,7 +49,7 @@ export default function DispatchTimeline({
         </p>
       ) : (
         <div className="space-y-3">
-          {dispatches.map((d, i) => {
+          {visible.map((d, i) => {
             const isPlanned = d.status === "planned";
             return (
               <div
@@ -92,6 +106,25 @@ export default function DispatchTimeline({
               </div>
             );
           })}
+
+          {hidden > 0 && (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="w-full rounded-lg bg-white/[0.02] px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-white/[0.05] hover:text-foreground"
+            >
+              Show {hidden} more
+            </button>
+          )}
+          {collapsible && expanded && dispatches.length > COLLAPSED_LIMIT && (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="w-full rounded-lg bg-white/[0.02] px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-white/[0.05] hover:text-foreground"
+            >
+              Show fewer
+            </button>
+          )}
 
           {/* Total summary */}
           <div className="mt-1 flex items-center justify-between rounded-lg bg-white/[0.02] px-3 py-2 text-xs">

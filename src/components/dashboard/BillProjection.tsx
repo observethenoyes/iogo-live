@@ -38,7 +38,26 @@ export default function BillProjection({
   const daysRemaining = daysInMonth - dayOfMonth;
   const progress = dayOfMonth / daysInMonth;
 
-  if (error) return null;
+  if (error) {
+    return (
+      <div
+        className="glass-card animate-fade-up rounded-2xl p-4 md:p-6"
+        style={{ animationDelay: "300ms" }}
+      >
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+            <Receipt size={14} className="text-primary" />
+          </div>
+          <h2 className="text-base font-semibold text-foreground">
+            Bill Projection
+          </h2>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Couldn&apos;t load this month&apos;s data. Try refreshing in a moment.
+        </p>
+      </div>
+    );
+  }
 
   // Loading skeleton
   if (!data) {
@@ -70,7 +89,27 @@ export default function BillProjection({
   const thisMonthDays = data.days.filter(
     (d) => d.date.startsWith(monthPrefix) && d.totalKwh > 0
   );
-  if (thisMonthDays.length === 0) return null;
+  if (thisMonthDays.length === 0) {
+    return (
+      <div
+        className="glass-card animate-fade-up rounded-2xl p-4 md:p-6"
+        style={{ animationDelay: "300ms" }}
+      >
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+            <Receipt size={14} className="text-primary" />
+          </div>
+          <h2 className="text-base font-semibold text-foreground">
+            Bill Projection
+          </h2>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Not enough data yet this month — your projection will appear once
+          the first day of consumption is settled.
+        </p>
+      </div>
+    );
+  }
 
   const costSoFar = thisMonthDays.reduce(
     (sum, d) => sum + d.totalCostPence,

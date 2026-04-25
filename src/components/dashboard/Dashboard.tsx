@@ -164,7 +164,24 @@ export default function Dashboard({
   );
 
   // Live view uses today's real dailySummary with the current slot index.
-  const liveSlotIndex = useMemo(() => getCurrentUkSlotIndex(), []);
+  // Recompute every 30s so the "NOW" indicator advances and pull fresh
+  // server data every 5 min so newly-settled telemetry shows up.
+  const [liveSlotIndex, setLiveSlotIndex] = useState(() =>
+    getCurrentUkSlotIndex()
+  );
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setLiveSlotIndex(getCurrentUkSlotIndex());
+    }, 30_000);
+    return () => clearInterval(tick);
+  }, []);
+  useEffect(() => {
+    if (range !== "live" || currentDate !== todayDate) return;
+    const refresh = setInterval(() => {
+      router.refresh();
+    }, 5 * 60_000);
+    return () => clearInterval(refresh);
+  }, [range, currentDate, todayDate, router]);
   const liveSummary = useMemo(
     () => ({ ...dailySummary, liveSlotIndex }),
     [dailySummary, liveSlotIndex]
@@ -211,6 +228,13 @@ export default function Dashboard({
   const [rangeCache, setRangeCache] = useState<
     Record<string, RangeData>
   >({});
+
+  // Drop cached range data when the daily summary changes identity — that
+  // means the server re-rendered (e.g. after a rate-override save), so the
+  // weekly/monthly/yearly responses currently in cache are stale too.
+  useEffect(() => {
+    setRangeCache({});
+  }, [dailySummary]);
 
   // Fetch range data when the user switches to a non-daily/live range.
   // Uses a ref to avoid re-creating the callback when rangeCache changes.
@@ -406,7 +430,7 @@ export default function Dashboard({
       case "monthly": {
         const state = getRangeState(range);
         if (state.status !== "ok") return [];
-        return ((state.data.dispatches as DispatchEvent[]) ?? []).slice(0, 4);
+        return (state.data.dispatches as DispatchEvent[]) ?? [];
       }
       case "yearly":
         return [];
@@ -567,7 +591,10 @@ export default function Dashboard({
               showCostBreakdown ? "md:grid-cols-3" : "md:grid-cols-2"
             }`}
           >
-            <DispatchTimeline dispatches={dispatchesToShow} />
+            <DispatchTimeline
+              dispatches={dispatchesToShow}
+              collapsible={range === "weekly" || range === "monthly"}
+            />
             {showCostBreakdown && (
               <CostBreakdown summary={dailySummary} />
             )}
