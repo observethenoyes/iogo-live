@@ -5,13 +5,10 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
-    # env_file:
-    #   - .env.local
-    # Or set env vars directly:
-    # environment:
-    #   OCTOPUS_API_KEY: sk_live_xxxxxxxxxxxxxxxxxxxx
-    #   OCTOPUS_ACCOUNT_NUMBER: A-XXXXXXXX
-    #   OCTOPUS_MPAN: "1234567890123"
-    #   OCTOPUS_METER_SERIAL: 12A3456789
-    #   OCTOPUS_PRODUCT_CODE: INTELLI-VAR-22-10-14
-    #   OCTOPUS_TARIFF_CODE: E-1R-INTELLI-VAR-22-10-14-A
+    environment:
+      OCTOPUS_API_KEY: ${OCTOPUS_API_KEY}
+      OCTOPUS_ACCOUNT_NUMBER: ${OCTOPUS_ACCOUNT_NUMBER}
+      OCTOPUS_MPAN: "${OCTOPUS_MPAN}"
+      OCTOPUS_METER_SERIAL: ${OCTOPUS_METER_SERIAL}
+      OCTOPUS_PRODUCT_CODE: ${OCTOPUS_PRODUCT_CODE}
+      OCTOPUS_TARIFF_CODE: ${OCTOPUS_TARIFF_CODE}
