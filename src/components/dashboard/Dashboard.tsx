@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Zap, Settings, LogOut } from "lucide-react";
 import { signOut } from "@/app/actions/auth";
+import { ukSlotIndex } from "@/lib/calculator/timezone";
 import type {
   CostSlot,
   DailySummary,
@@ -13,7 +14,7 @@ import type {
   DispatchEvent,
   MonthlySummaryCompact,
   TimeRange,
-} from "@/lib/mock-data";
+} from "@/lib/types";
 import RangeKpiCards from "./RangeKpiCards";
 import DispatchTimeline from "./DispatchTimeline";
 import DateNavigator from "./DateNavigator";
@@ -101,19 +102,6 @@ function ChartSkeleton() {
   );
 }
 
-/** Returns the current half-hour slot index (0–47) in UK local time. */
-function getCurrentUkSlotIndex(): number {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Europe/London",
-    hour: "numeric",
-    minute: "numeric",
-    hour12: false,
-  }).formatToParts(new Date());
-  const h = parseInt(parts.find((p) => p.type === "hour")!.value);
-  const m = parseInt(parts.find((p) => p.type === "minute")!.value);
-  return h * 2 + (m >= 30 ? 1 : 0);
-}
-
 export interface TariffComparisonData {
   /** User's actual IOG cost for the day (pence, consumption only — no standing charge). */
   iogCostPence: number;
@@ -135,6 +123,13 @@ interface DashboardProps {
   agreementEndDate?: string | null;
   /** Server-computed tariff comparison for the viewed day. */
   tariffComparison?: TariffComparisonData | null;
+  /**
+   * Current half-hour slot (0–47) as resolved on the server. Passed in rather
+   * than computed here so the server render and hydration agree — deriving it
+   * from `new Date()` in a lazy useState initialiser runs on both sides and
+   * mismatches whenever a half-hour boundary falls between them.
+   */
+  initialSlotIndex: number;
 }
 
 export default function Dashboard({
@@ -145,9 +140,12 @@ export default function Dashboard({
   initialRange,
   agreementEndDate,
   tariffComparison,
+  initialSlotIndex,
 }: DashboardProps) {
   const router = useRouter();
-  const [range, setRange] = useState<TimeRange>(initialRange ?? "daily");
+  const [range, setRange] = useState<TimeRange>(
+    initialRange ?? (currentDate === todayDate ? "live" : "daily")
+  );
   const [includeStandingCharge, setIncludeStandingCharge] = useState(false);
 
   // When "Live" is clicked from a past date, navigate to today so
@@ -166,12 +164,10 @@ export default function Dashboard({
   // Live view uses today's real dailySummary with the current slot index.
   // Recompute every 30s so the "NOW" indicator advances and pull fresh
   // server data every 5 min so newly-settled telemetry shows up.
-  const [liveSlotIndex, setLiveSlotIndex] = useState(() =>
-    getCurrentUkSlotIndex()
-  );
+  const [liveSlotIndex, setLiveSlotIndex] = useState(initialSlotIndex);
   useEffect(() => {
     const tick = setInterval(() => {
-      setLiveSlotIndex(getCurrentUkSlotIndex());
+      setLiveSlotIndex(ukSlotIndex());
     }, 30_000);
     return () => clearInterval(tick);
   }, []);
@@ -229,57 +225,57 @@ export default function Dashboard({
     Record<string, RangeData>
   >({});
 
+  // Keys already requested for the current cache generation. A ref rather than
+  // state so React's double-invoked StrictMode effects can't fire two requests
+  // for the same key before the first `setRangeCache` has committed.
+  const requestedKeys = useRef<Set<string>>(new Set());
+
+  // Bumped whenever the cache is dropped, to re-trigger the fetch below for
+  // whichever range is on screen. Without it, clearing the cache while sitting
+  // on a range view left it stuck on "loading…" until the range or date moved.
+  const [cacheGeneration, setCacheGeneration] = useState(0);
+
   // Drop cached range data when the daily summary changes identity — that
   // means the server re-rendered (e.g. after a rate-override save), so the
   // weekly/monthly/yearly responses currently in cache are stale too.
   useEffect(() => {
     setRangeCache({});
+    requestedKeys.current.clear();
+    setCacheGeneration((g) => g + 1);
   }, [dailySummary]);
 
-  // Fetch range data when the user switches to a non-daily/live range.
-  // Uses a ref to avoid re-creating the callback when rangeCache changes.
-  const fetchRangeData = useCallback(
-    (r: "weekly" | "monthly" | "yearly") => {
-      const cacheKey = `${r}:${currentDate}`;
-      setRangeCache((prev) => {
-        const cached = prev[cacheKey];
-        if (cached && (cached.status === "ok" || cached.status === "loading"))
-          return prev; // already fetched or in-flight
-        // Start the fetch and update state when it resolves.
-        fetch(`/api/summary?range=${r}&date=${currentDate}`)
-          .then((res) => {
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return res.json();
-          })
-          .then((data) =>
-            setRangeCache((p) => ({
-              ...p,
-              [cacheKey]: { status: "ok", data },
-            }))
-          )
-          .catch((err) =>
-            setRangeCache((p) => ({
-              ...p,
-              [cacheKey]: {
-                status: "error",
-                message:
-                  err instanceof Error ? err.message : "Unknown error",
-              },
-            }))
-          );
-        return { ...prev, [cacheKey]: { status: "loading" } };
-      });
-    },
-    [currentDate]
-  );
-
-  // Trigger fetch whenever range changes to weekly/monthly/yearly.
+  // Fetch range data when the user switches to a non-daily/live range. The
+  // fetch lives in the effect, not inside a `setRangeCache` updater: updaters
+  // must be pure, and StrictMode double-invokes them in dev, which fired every
+  // request twice.
   useEffect(() => {
-    if (range === "weekly" || range === "monthly" || range === "yearly") {
-      fetchRangeData(range);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, currentDate]);
+    if (range !== "weekly" && range !== "monthly" && range !== "yearly") return;
+
+    const cacheKey = `${range}:${currentDate}`;
+    if (requestedKeys.current.has(cacheKey)) return;
+    requestedKeys.current.add(cacheKey);
+    setRangeCache((prev) => ({ ...prev, [cacheKey]: { status: "loading" } }));
+
+    fetch(`/api/summary?range=${range}&date=${currentDate}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data) =>
+        setRangeCache((p) => ({ ...p, [cacheKey]: { status: "ok", data } }))
+      )
+      .catch((err) => {
+        // Release the key so returning to this range retries.
+        requestedKeys.current.delete(cacheKey);
+        setRangeCache((p) => ({
+          ...p,
+          [cacheKey]: {
+            status: "error",
+            message: err instanceof Error ? err.message : "Unknown error",
+          },
+        }));
+      });
+  }, [range, currentDate, cacheGeneration]);
 
   const getRangeState = (r: string): RangeData =>
     rangeCache[`${r}:${currentDate}`] ?? { status: "idle" };
@@ -538,7 +534,10 @@ export default function Dashboard({
       <main className="relative z-10 mx-auto w-full max-w-7xl flex-1 px-4 py-6 md:px-6">
         <div className="space-y-5">
           {agreementEndDate && (
-            <TariffExpiryBanner agreementEndDate={agreementEndDate} />
+            <TariffExpiryBanner
+              agreementEndDate={agreementEndDate}
+              todayDate={todayDate}
+            />
           )}
 
           <RangeKpiCards

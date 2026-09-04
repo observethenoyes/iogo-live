@@ -1,6 +1,12 @@
+import { redirect } from "next/navigation";
 import Dashboard from "@/components/dashboard/Dashboard";
 import { buildDailySummary } from "@/lib/calculator/calculate-daily";
-import { todayUkDate, ukLocalDayLabel, ukDayStart } from "@/lib/calculator/timezone";
+import {
+  todayUkDate,
+  ukLocalDayLabel,
+  ukDayStart,
+  ukSlotIndex,
+} from "@/lib/calculator/timezone";
 import { resolveCredentials } from "@/lib/dal";
 import { supabaseConfigured, octopusEnv, envToCredentials } from "@/lib/env";
 import { getAgreementEndDate } from "@/lib/octopus/rest-client";
@@ -44,10 +50,11 @@ export default async function Home({
   } else {
     const env = octopusEnv();
     if (!env) {
-      // No env vars and no Supabase — show setup instructions.
-      throw new Error(
-        "Missing required environment variables. Visit /setup to discover your Octopus account details."
-      );
+      // Self-hosted with no credentials yet. Redirect into the discovery flow
+      // rather than throwing: production builds redact Server Component error
+      // messages, so error.tsx could never tell this apart from a genuine
+      // failure. Mirrors what `requireCredentials` does in Supabase mode.
+      redirect("/setup");
     }
     creds = envToCredentials(env);
   }
@@ -74,6 +81,7 @@ export default async function Home({
       initialRange={initialRange as "live" | "daily" | "weekly" | "monthly" | "yearly" | undefined}
       agreementEndDate={agreementEndDate}
       tariffComparison={tariffComparison}
+      initialSlotIndex={ukSlotIndex()}
     />
   );
 }

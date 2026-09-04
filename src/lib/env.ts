@@ -69,10 +69,7 @@ export function envToCredentials(
   };
 }
 
-/** True if Supabase env vars are set (multi-user mode). */
-export function supabaseConfigured(): boolean {
-  return !!(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  );
-}
+// Re-exported so existing `@/lib/env` importers keep working. The definition
+// lives outside this module because this one is `server-only` and the proxy
+// needs the same check — see the note in `lib/supabase/config.ts`.
+export { supabaseConfigured } from "@/lib/supabase/config";

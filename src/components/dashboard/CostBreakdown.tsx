@@ -1,7 +1,7 @@
 "use client";
 
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import type { DailySummary } from "@/lib/mock-data";
+import type { DailySummary } from "@/lib/types";
 
 function formatPenceToPounds(pence: number): string {
   return `£${(pence / 100).toFixed(2)}`;

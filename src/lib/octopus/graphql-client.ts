@@ -251,6 +251,63 @@ export interface ChargingSessionInfo {
   energyAddedKwh: number;
 }
 
+// The connection returns at most this many edges per query, and `after` /
+// `before` are DateTimes rather than Relay cursors, so there is no way to page
+// *within* a window. Long ranges are therefore sliced into windows short
+// enough that even a heavy charger (three sessions a day) stays under the cap
+// — otherwise a yearly view silently lost every session before the most
+// recent hundred, and those days showed no EV split at all.
+const SESSION_PAGE_SIZE = 100;
+const SESSION_WINDOW_DAYS = 28;
+
+const CHARGING_SESSIONS_QUERY = `query ChargingSessions($accountNumber: String!, $deviceId: String!, $after: DateTime!, $before: DateTime!) {
+         devices(accountNumber: $accountNumber, deviceId: $deviceId) {
+           ... on SmartFlexChargePoint {
+             chargingSessions(after: $after, before: $before, last: ${SESSION_PAGE_SIZE}) {
+               edges { node { start end ... on SmartFlexChargingSession {
+                 type
+                 energyAdded { value unit }
+               } } }
+             }
+           }
+         }
+       }`;
+
+/** Split [from, to) into windows of at most SESSION_WINDOW_DAYS. */
+function sessionWindows(from: Date, to: Date): Array<{ after: string; before: string }> {
+  const spanMs = SESSION_WINDOW_DAYS * 24 * HOUR_MS;
+  const windows: Array<{ after: string; before: string }> = [];
+  for (let start = from.getTime(); start < to.getTime(); start += spanMs) {
+    const end = Math.min(start + spanMs, to.getTime());
+    windows.push({
+      after: new Date(start).toISOString(),
+      before: new Date(end).toISOString(),
+    });
+  }
+  return windows;
+}
+
+async function fetchSessionEdges(
+  creds: OctopusCredentials,
+  deviceId: string,
+  after: string,
+  before: string
+): Promise<ChargingSessionEdge[]> {
+  const data = await gqlWithRetry<ChargingSessionsData>(
+    creds,
+    CHARGING_SESSIONS_QUERY,
+    { accountNumber: creds.accountNumber, deviceId, after, before }
+  );
+  const edges = data.devices?.[0]?.chargingSessions?.edges ?? [];
+  if (edges.length >= SESSION_PAGE_SIZE) {
+    // Shouldn't happen at 28-day windows, but say so rather than under-report.
+    console.warn(
+      `[octopus] chargingSessions ${after}..${before} hit the ${SESSION_PAGE_SIZE}-edge cap; some sessions in that window were dropped.`
+    );
+  }
+  return edges;
+}
+
 async function getChargingSessionEnvelopes(
   creds: OctopusCredentials,
   rangeStart: Date,
@@ -264,32 +321,27 @@ async function getChargingSessionEnvelopes(
     const deviceId = await getChargePointDeviceId(creds);
     if (!deviceId) return { dispatches: [], chargingSessions: [], error: null };
 
-    const before = new Date(rangeEnd.getTime() + 24 * HOUR_MS).toISOString();
-    const after = new Date(rangeStart.getTime() - 24 * HOUR_MS).toISOString();
-
-    const data = await gqlWithRetry<ChargingSessionsData>(
-      creds,
-      `query ChargingSessions($accountNumber: String!, $deviceId: String!, $after: DateTime!, $before: DateTime!) {
-         devices(accountNumber: $accountNumber, deviceId: $deviceId) {
-           ... on SmartFlexChargePoint {
-             chargingSessions(after: $after, before: $before, last: 100) {
-               edges { node { start end ... on SmartFlexChargingSession {
-                 type
-                 energyAdded { value unit }
-               } } }
-             }
-           }
-         }
-       }`,
-      {
-        accountNumber: creds.accountNumber,
-        deviceId,
-        after,
-        before,
-      }
+    const windows = sessionWindows(
+      new Date(rangeStart.getTime() - 24 * HOUR_MS),
+      new Date(rangeEnd.getTime() + 24 * HOUR_MS)
+    );
+    const edgeLists = await Promise.all(
+      windows.map((w) => fetchSessionEdges(creds, deviceId, w.after, w.before))
     );
 
-    const edges = data.devices?.[0]?.chargingSessions?.edges ?? [];
+    // A session straddling a window boundary comes back in both, so dedupe on
+    // the interval before it gets counted twice.
+    const seen = new Set<string>();
+    const edges: ChargingSessionEdge[] = [];
+    for (const list of edgeLists) {
+      for (const e of list) {
+        const key = `${e.node.start}|${e.node.end}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        edges.push(e);
+      }
+    }
+
     const rs = rangeStart.getTime();
     const re = rangeEnd.getTime();
     const dispatches: DispatchInterval[] = [];

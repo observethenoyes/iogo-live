@@ -13,7 +13,7 @@ import {
   Legend,
   ReferenceLine,
 } from "recharts";
-import type { CostSlot } from "@/lib/mock-data";
+import type { CostSlot } from "@/lib/types";
 
 type Metric = "kwh" | "cost";
 
@@ -78,7 +78,7 @@ function CustomTooltip({
         <div className="flex items-center justify-between gap-6">
           <span>Rate</span>
           <span className="tabular-nums font-mono text-foreground">
-            {d.rate}p/kWh
+            {d.rate.toFixed(2)}p/kWh
           </span>
         </div>
         <div className="flex items-center justify-between gap-6">

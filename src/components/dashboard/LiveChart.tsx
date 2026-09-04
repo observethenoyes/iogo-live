@@ -12,7 +12,7 @@ import {
   Legend,
   ReferenceLine,
 } from "recharts";
-import type { DailySummary } from "@/lib/mock-data";
+import type { DailySummary } from "@/lib/types";
 
 const GRADIENT_MAP: Record<string, string> = {
   "off-peak": "url(#grad-off-peak)",

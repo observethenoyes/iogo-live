@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { PlugZap, Clock, Check, CalendarClock } from "lucide-react";
-import type { DispatchEvent } from "@/lib/mock-data";
+import type { DispatchEvent } from "@/lib/types";
 
 const COLLAPSED_LIMIT = 4;
 

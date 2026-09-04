@@ -1,29 +1,34 @@
 "use client";
 
 import { AlertTriangle, ExternalLink } from "lucide-react";
+import { ukDayStart, ukLocalLongDate } from "@/lib/calculator/timezone";
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 interface TariffExpiryBannerProps {
   /** ISO date string of when the tariff agreement expires. */
   agreementEndDate: string;
+  /** Today's UK date (YYYY-MM-DD) as resolved on the server. */
+  todayDate: string;
 }
 
 export default function TariffExpiryBanner({
   agreementEndDate,
+  todayDate,
 }: TariffExpiryBannerProps) {
+  // Both the countdown and the date label are derived from server-provided
+  // values in a fixed timezone. Reading `new Date()` during render, and
+  // formatting without an explicit timezone, made the server and the browser
+  // disagree across a midnight or BST boundary — a hydration mismatch.
   const endDate = new Date(agreementEndDate);
-  const now = new Date();
   const daysRemaining = Math.ceil(
-    (endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+    (endDate.getTime() - ukDayStart(todayDate).getTime()) / MS_PER_DAY
   );
 
   // Only show if within 30 days of expiry
   if (daysRemaining > 30 || daysRemaining < 0) return null;
 
-  const formattedDate = endDate.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  const formattedDate = ukLocalLongDate(endDate);
 
   const isUrgent = daysRemaining <= 7;
 

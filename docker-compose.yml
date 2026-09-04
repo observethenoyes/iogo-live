@@ -1,3 +1,11 @@
+# Single user mode: no database, no Supabase, no login.
+# Set the variables below in a .env file next to this one, or in your
+# Portainer stack's "Environment variables" section.
+#
+# You only need OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER to start. Bring the
+# stack up, open /setup to discover the other four, add them here, redeploy.
+# Every value uses a `:-` default so the container still starts while the
+# config is incomplete — the app redirects you to /setup until it isn't.
 services:
   iog-dashboard:
     build: .
@@ -6,9 +14,13 @@ services:
     ports:
       - "3000:3000"
     environment:
-      OCTOPUS_API_KEY: ${OCTOPUS_API_KEY}
-      OCTOPUS_ACCOUNT_NUMBER: ${OCTOPUS_ACCOUNT_NUMBER}
-      OCTOPUS_MPAN: "${OCTOPUS_MPAN}"
-      OCTOPUS_METER_SERIAL: ${OCTOPUS_METER_SERIAL}
-      OCTOPUS_PRODUCT_CODE: ${OCTOPUS_PRODUCT_CODE}
-      OCTOPUS_TARIFF_CODE: ${OCTOPUS_TARIFF_CODE}
+      OCTOPUS_API_KEY: "${OCTOPUS_API_KEY:-}"
+      OCTOPUS_ACCOUNT_NUMBER: "${OCTOPUS_ACCOUNT_NUMBER:-}"
+      OCTOPUS_MPAN: "${OCTOPUS_MPAN:-}"
+      OCTOPUS_METER_SERIAL: "${OCTOPUS_METER_SERIAL:-}"
+      OCTOPUS_PRODUCT_CODE: "${OCTOPUS_PRODUCT_CODE:-}"
+      OCTOPUS_TARIFF_CODE: "${OCTOPUS_TARIFF_CODE:-}"
+      # Optional: fixed rates instead of the live Octopus values (pence, inc VAT).
+      OCTOPUS_PEAK_RATE_OVERRIDE: "${OCTOPUS_PEAK_RATE_OVERRIDE:-}"
+      OCTOPUS_OFF_PEAK_RATE_OVERRIDE: "${OCTOPUS_OFF_PEAK_RATE_OVERRIDE:-}"
+      OCTOPUS_STANDING_CHARGE_OVERRIDE: "${OCTOPUS_STANDING_CHARGE_OVERRIDE:-}"

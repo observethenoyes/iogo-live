@@ -6,3 +6,9 @@ node_modules
 plan.md
 plan-v2.md
 docs/screenshots/*.png
+
+# Tests and CI aren't needed in the image build context.
+**/*.test.ts
+vitest.config.mts
+test
+.github

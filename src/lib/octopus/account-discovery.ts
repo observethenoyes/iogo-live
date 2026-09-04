@@ -1,5 +1,5 @@
 import "server-only";
-import { todayUkDate, ukDayStart } from "@/lib/calculator/timezone";
+import { todayUkDate, ukDayStart, ukDayEnd } from "@/lib/calculator/timezone";
 
 /**
  * Given just an Octopus API key + account number, discover the meter and
@@ -23,6 +23,7 @@ export class DiscoveryError extends Error {
       | "no-electricity" // account has no electricity meter point
       | "no-active-agreement" // all agreements expired — unusual
       | "not-iog" // active tariff isn't an Intelligent Go product
+      | "no-meters" // IOG tariff is active, but the MPAN lists no meters
       | "upstream" // any other HTTP failure
       | "unexpected-shape", // response JSON didn't match what we expected
     public status?: number
@@ -73,7 +74,7 @@ interface AccountResponse {
  * Live rates for a discovered meter, pulled from the public product endpoint
  * using the discovered tariff + product code. These are purely informational
  * on the setup page — the dashboard re-fetches them at render time via
- * `getStandardUnitRates()` / `getStandingCharges()` so they stay fresh.
+ * `getTariffRates()` / `getStandingCharges()` so they stay fresh.
  *
  * `null` on any field means the product endpoint responded but didn't publish
  * a rate for that slot right now (e.g. a brand-new tariff whose time-of-use
@@ -130,9 +131,18 @@ export function productCodeFromTariff(tariffCode: string): string | null {
   return m ? m[1] : null;
 }
 
-/** True if a product code looks like any flavour of Intelligent Octopus Go. */
+/**
+ * True if a product code looks like any flavour of Intelligent Octopus Go.
+ *
+ * Octopus renamed the family: the original products are `INTELLI-*`
+ * (INTELLI-VAR-22-10-14), the current ones are `IOG-*`
+ * (IOG-SMB-VAR-24-10-29, whose display_name is literally "Intelligent Octopus
+ * Go"). Both have to be accepted or existing customers on the newer code are
+ * told they aren't on IOG.
+ */
 export function isIogProduct(productCode: string): boolean {
-  return productCode.toUpperCase().startsWith("INTELLI");
+  const code = productCode.toUpperCase();
+  return code.startsWith("INTELLI") || code.startsWith("IOG-");
 }
 
 /** Pick the agreement whose [valid_from, valid_to) interval contains `now`. */
@@ -225,13 +235,23 @@ async function fetchRatesFor(
   tariffCode: string,
   authHeader: string
 ): Promise<DiscoveredRates> {
-  const todayStart = ukDayStart(todayUkDate());
+  const today = todayUkDate();
+  const todayStart = ukDayStart(today);
   const offPeakAt = todayStart; // midnight UK → off-peak window
   const peakAt = new Date(todayStart.getTime() + 12 * HOUR_MS); // noon UK → peak window
 
+  // Scope the query to today. Unfiltered, these endpoints return the tariff's
+  // whole history (~2000 entries) and we'd be relying on newest-first ordering
+  // to land today's buckets on the single page we read. Filtered, the response
+  // is the two or three buckets covering today, so one page is provably enough.
+  const period = new URLSearchParams({
+    page_size: "100",
+    period_from: todayStart.toISOString(),
+    period_to: ukDayEnd(today).toISOString(),
+  });
   const base = `${BASE}/products/${encodeURIComponent(productCode)}/electricity-tariffs/${encodeURIComponent(tariffCode)}`;
-  const ratesUrl = `${base}/standard-unit-rates/?page_size=100`;
-  const standingUrl = `${base}/standing-charges/?page_size=100`;
+  const ratesUrl = `${base}/standard-unit-rates/?${period}`;
+  const standingUrl = `${base}/standing-charges/?${period}`;
 
   async function getJson<T>(url: string): Promise<T | null> {
     try {
@@ -252,17 +272,46 @@ async function fetchRatesFor(
     getJson<UnitRateResp>(standingUrl),
   ]);
 
+  const standardResults = unitRates?.results ?? [];
+  let peakPence = rateAtInstant(standardResults, peakAt);
+  let offPeakPence = rateAtInstant(standardResults, offPeakAt);
+
+  // The renamed IOG-* products publish nothing on standard-unit-rates and use
+  // flat day/night endpoints instead. Without this the setup page shows
+  // "unavailable" for both rates on every current IOG tariff. Unfiltered by
+  // period because these are one or two open-ended entries.
+  if (standardResults.length === 0) {
+    const [day, night] = await Promise.all([
+      getJson<UnitRateResp>(`${base}/day-unit-rates/?page_size=100`),
+      getJson<UnitRateResp>(`${base}/night-unit-rates/?page_size=100`),
+    ]);
+    peakPence = rateAtInstant(day?.results ?? [], peakAt);
+    offPeakPence = rateAtInstant(night?.results ?? [], offPeakAt);
+  }
+
   return {
-    peakPence: unitRates ? rateAtInstant(unitRates.results ?? [], peakAt) : null,
-    offPeakPence: unitRates
-      ? rateAtInstant(unitRates.results ?? [], offPeakAt)
-      : null,
+    peakPence,
+    offPeakPence,
     standingChargePence: standingCharges
       ? rateAtInstant(standingCharges.results ?? [], peakAt)
       : null,
     pricedAt: peakAt.toISOString(),
   };
 }
+
+/**
+ * Why a meter point couldn't be used. Collected so a failed discovery can say
+ * which check actually failed: all five of these used to surface as "no
+ * Intelligent Octopus Go tariff found", which is misleading for four of them.
+ * Carries the tariff code (a public product identifier) but never the MPAN or
+ * meter serial.
+ */
+export type MeterRejection =
+  | { kind: "export" }
+  | { kind: "no-active-agreement" }
+  | { kind: "unparseable-tariff"; tariffCode: string }
+  | { kind: "not-iog"; tariffCode: string; productCode: string }
+  | { kind: "no-meters"; tariffCode: string; productCode: string };
 
 /**
  * Pick the best electricity meter point on a property: active (non-export)
@@ -272,15 +321,33 @@ async function fetchRatesFor(
 async function pickMeter(
   property: Property,
   now: Date,
-  authHeader: string
+  authHeader: string,
+  rejections: MeterRejection[]
 ): Promise<DiscoveredMeter | null> {
   for (const emp of property.electricity_meter_points) {
-    if (emp.is_export) continue;
+    if (emp.is_export) {
+      rejections.push({ kind: "export" });
+      continue;
+    }
     const agreement = activeAgreement(emp.agreements, now);
-    if (!agreement) continue;
-    const productCode = productCodeFromTariff(agreement.tariff_code);
-    if (!productCode || !isIogProduct(productCode)) continue;
-    if (emp.meters.length === 0) continue;
+    if (!agreement) {
+      rejections.push({ kind: "no-active-agreement" });
+      continue;
+    }
+    const tariffCode = agreement.tariff_code;
+    const productCode = productCodeFromTariff(tariffCode);
+    if (!productCode) {
+      rejections.push({ kind: "unparseable-tariff", tariffCode });
+      continue;
+    }
+    if (!isIogProduct(productCode)) {
+      rejections.push({ kind: "not-iog", tariffCode, productCode });
+      continue;
+    }
+    if (!emp.meters?.length) {
+      rejections.push({ kind: "no-meters", tariffCode, productCode });
+      continue;
+    }
 
     // Octopus typically lists meters in install order (oldest first), so the
     // last entry is usually the current one. Probe newest → oldest and pick
@@ -392,12 +459,13 @@ export async function discoverAccount({
   // Probe each property's meters in parallel — one network round-trip per
   // property, not per meter. Within a property pickMeter walks the meters
   // sequentially because a first-match-wins probe must be ordered.
+  const rejections: MeterRejection[] = [];
   const properties: DiscoveredProperty[] = await Promise.all(
     data.properties.map(async (p) => ({
       id: p.id,
       label: formatAddress(p),
       movedOutAt: p.moved_out_at ?? null,
-      meter: await pickMeter(p, now, authHeader),
+      meter: await pickMeter(p, now, authHeader, rejections),
     }))
   );
 
@@ -426,18 +494,48 @@ export async function discoverAccount({
         "no-electricity"
       );
     }
-    // There's electricity but we couldn't find an active IOG agreement.
-    // Figure out whether it's "no active agreement" (unusual) or "not IOG".
-    const anyActive = data.properties.some((p) =>
-      p.electricity_meter_points.some(
-        (emp) => !emp.is_export && activeAgreement(emp.agreements, now) !== null
-      )
+    // Report the most specific reason we recorded, most actionable first.
+    // Naming the tariff code matters: without it, "not IOG" is a dead end for
+    // anyone who believes they *are* on IOG.
+    const noMeters = rejections.find((r) => r.kind === "no-meters");
+    if (noMeters) {
+      throw new DiscoveryError(
+        `Found an active Intelligent Octopus Go agreement (${noMeters.tariffCode}), but ` +
+          `Octopus didn't list any meters against that MPAN. That usually means a recent ` +
+          `meter exchange or a new supply that hasn't finished registering. Try again in ` +
+          `a day or two, or set OCTOPUS_MPAN and OCTOPUS_METER_SERIAL manually.`,
+        "no-meters"
+      );
+    }
+
+    const wrongTariff = rejections.find(
+      (r) => r.kind === "not-iog" || r.kind === "unparseable-tariff"
     );
+    if (wrongTariff && "tariffCode" in wrongTariff) {
+      const code = wrongTariff.tariffCode;
+      throw new DiscoveryError(
+        wrongTariff.kind === "not-iog"
+          ? `The active electricity tariff on this account is "${code}", which isn't an ` +
+            `Intelligent Octopus Go product. This dashboard is built around IOG's dispatch ` +
+            `and off-peak structure, so it can't price that tariff correctly.`
+          : `Couldn't interpret the active tariff code "${code}" — it doesn't match the ` +
+            `expected E-{n}R-{PRODUCT}-{REGION} shape. Please report this code so it can ` +
+            `be supported.`,
+        "not-iog"
+      );
+    }
+
+    if (rejections.some((r) => r.kind === "no-active-agreement")) {
+      throw new DiscoveryError(
+        "No currently-active electricity agreement found on this account. If you've just " +
+          "switched tariff or moved in, the new agreement may not have started yet.",
+        "no-active-agreement"
+      );
+    }
+
     throw new DiscoveryError(
-      anyActive
-        ? "No Intelligent Octopus Go tariff found on this account's active electricity agreements."
-        : "No active electricity agreement found on this account.",
-      anyActive ? "not-iog" : "no-active-agreement"
+      "This account only has export meter points, so there's no consumption to show.",
+      "no-electricity"
     );
   }
 

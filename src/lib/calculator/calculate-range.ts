@@ -5,48 +5,20 @@ import type {
   RangeSummary,
   YearlySummary,
   DispatchEvent,
-} from "@/lib/mock-data";
+} from "@/lib/types";
 import type { OctopusCredentials } from "@/lib/octopus/types";
 import {
+  buildRateLookup,
   getConsumption,
-  getStandardUnitRates,
   getStandingCharges,
-  rateAt as rateAtRates,
+  getTariffRates,
 } from "@/lib/octopus/rest-client";
-import {
-  getDispatches,
-  getTodayTelemetry,
-  type ChargingSessionInfo,
-} from "@/lib/octopus/graphql-client";
-import { classifySlots, type DispatchInterval } from "./classify-slots";
+import { getDispatches, getTodayTelemetry } from "@/lib/octopus/graphql-client";
+import { classifySlots } from "./classify-slots";
+import { evKwhForDay } from "./ev-energy";
 import { ukDayStart, ukDayEnd, addUkDays, ukLocalDayLabel, toUkLocal, todayUkDate } from "./timezone";
 
 const HOUR_MS = 60 * 60 * 1000;
-
-/**
- * Compute charger-reported EV kWh that falls within a single day.
- * Sessions spanning midnight are proportionally split by duration overlap.
- */
-function evKwhForDay(
-  sessions: ChargingSessionInfo[],
-  dayStart: Date,
-  dayEnd: Date
-): number | null {
-  if (sessions.length === 0) return null;
-  let total = 0;
-  let hasAny = false;
-  for (const s of sessions) {
-    const sessStart = Math.max(s.start.getTime(), dayStart.getTime());
-    const sessEnd = Math.min(s.end.getTime(), dayEnd.getTime());
-    if (sessEnd <= sessStart) continue;
-    const overlapMs = sessEnd - sessStart;
-    const totalMs = s.end.getTime() - s.start.getTime();
-    if (totalMs <= 0) continue;
-    total += s.energyAddedKwh * (overlapMs / totalMs);
-    hasAny = true;
-  }
-  return hasAny ? Math.round(total * 100) / 100 : null;
-}
 
 // ── Fallback rates (same as calculate-daily.ts) ──
 
@@ -135,11 +107,11 @@ async function buildDayCompacts(
     : periodFrom; // unused when !rangeIncludesRecent
 
   const { creds } = opts;
-  const [readings, unitRates, standingCharges, dispatchResult, telemetryResult] =
+  const [readings, rates, standingCharges, dispatchResult, telemetryResult] =
     await Promise.all([
       getConsumption(creds, periodFrom, periodTo, false),
-      getStandardUnitRates(creds),
-      getStandingCharges(creds),
+      getTariffRates(creds, periodFrom, periodTo),
+      getStandingCharges(creds, periodFrom, periodTo),
       getDispatches(creds, periodFrom, periodTo),
       rangeIncludesRecent
         ? getTodayTelemetry(creds, recentFrom, periodTo)
@@ -198,12 +170,13 @@ async function buildDayCompacts(
   // Resolve rates the same way as calculate-daily.ts, respecting user overrides.
   const offPeakLookupAt = periodFrom;
   const peakLookupAt = new Date(periodFrom.getTime() + 12 * HOUR_MS);
+  const standingChargeAt = buildRateLookup(standingCharges);
   const offPeakRate =
-    creds.offPeakRateOverride ?? rateAtRates(unitRates, offPeakLookupAt) ?? FALLBACK_OFF_PEAK_PENCE;
+    creds.offPeakRateOverride ?? rates.offPeakAt(offPeakLookupAt) ?? FALLBACK_OFF_PEAK_PENCE;
   const peakRate =
-    creds.peakRateOverride ?? rateAtRates(unitRates, peakLookupAt) ?? FALLBACK_PEAK_PENCE;
+    creds.peakRateOverride ?? rates.peakAt(peakLookupAt) ?? FALLBACK_PEAK_PENCE;
   const standingChargePencePerDay =
-    creds.standingChargeOverride ?? rateAtRates(standingCharges, periodFrom) ?? 0;
+    creds.standingChargeOverride ?? standingChargeAt(periodFrom) ?? 0;
 
   // Classify every reading.
   const allSlots = classifySlots({
@@ -211,7 +184,7 @@ async function buildDayCompacts(
     dispatches: dispatchIntervals,
     rateAt: creds.peakRateOverride != null
       ? () => creds.peakRateOverride!
-      : (at) => rateAtRates(unitRates, at),
+      : rates.peakAt,
     offPeakRate,
     peakRate,
   });
@@ -444,10 +417,16 @@ export async function buildYearlySummary(opts: {
     grandTotalSavings += totalSavings;
   }
 
-  const monthLabel = new Date(
-    Date.UTC(curYear, curMonth - 1, 15)
-  ).toLocaleDateString("en-GB", { month: "long", timeZone: "UTC" });
-  const label = `${monthLabel} ${curYear - 1} – ${monthLabel} ${curYear}`;
+  // Label the actual boundary months. The window runs from `curMonth - 12`
+  // (i.e. the month *after* this one, a year back) to `curMonth - 1`, so
+  // reusing the current month at both ends was off by one at the start.
+  const monthYearLabel = (monthIndex: number) =>
+    new Date(Date.UTC(curYear, monthIndex, 15)).toLocaleDateString("en-GB", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+  const label = `${monthYearLabel(curMonth - 12)} – ${monthYearLabel(curMonth - 1)}`;
 
   return {
     range: "yearly",

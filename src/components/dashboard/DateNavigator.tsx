@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Calendar } from "lucide-react";
-import type { TimeRange } from "@/lib/mock-data";
+import type { TimeRange } from "@/lib/types";
 import { addUkDays } from "@/lib/calculator/timezone";
 
 interface DateNavigatorProps {

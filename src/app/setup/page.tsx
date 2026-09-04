@@ -1,11 +1,11 @@
 import { verifySession, getUserCredentials } from "@/lib/dal";
 import { supabaseConfigured, octopusEnv, envToCredentials } from "@/lib/env";
 import {
-  getStandardUnitRates,
   getStandingCharges,
+  getTariffRates,
   rateAt,
 } from "@/lib/octopus/rest-client";
-import { todayUkDate, ukDayStart } from "@/lib/calculator/timezone";
+import { todayUkDate, ukDayStart, ukDayEnd } from "@/lib/calculator/timezone";
 import SetupClient from "./SetupClient";
 
 export const dynamic = "force-dynamic";
@@ -45,18 +45,23 @@ export default async function SetupPage() {
 
     // Fetch current live rates from the API.
     try {
-      const [unitRates, standingCharges] = await Promise.all([
-        getStandardUnitRates(creds),
-        getStandingCharges(creds),
-      ]);
-
       const today = todayUkDate();
       const midnight = ukDayStart(today);
+      const dayEnd = ukDayEnd(today);
       const noon = new Date(midnight.getTime() + 12 * 60 * 60 * 1000);
 
+      // getTariffRates, not getStandardUnitRates: the current IOG-* products
+      // publish flat day/night rates and return nothing from the standard
+      // endpoint, which showed "—" for both rates here while the standing
+      // charge resolved normally.
+      const [rates, standingCharges] = await Promise.all([
+        getTariffRates(creds, midnight, dayEnd),
+        getStandingCharges(creds, midnight, dayEnd),
+      ]);
+
       liveRates = {
-        peakPence: rateAt(unitRates, noon),
-        offPeakPence: rateAt(unitRates, midnight),
+        peakPence: rates.peakAt(noon),
+        offPeakPence: rates.offPeakAt(midnight),
         standingChargePence: rateAt(standingCharges, midnight),
       };
     } catch {
