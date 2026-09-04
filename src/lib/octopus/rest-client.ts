@@ -122,45 +122,180 @@ export async function getConsumption(
   return all.filter((r) => new Date(r.interval_start).getTime() < cutoff);
 }
 
+// The rates endpoints publish time-of-use buckets — for IOG, two or three
+// entries per day going back to the product's launch. Always ask for the
+// window we actually need. An unfiltered query pulls the lot (~2000 entries,
+// 20 sequential pages at page_size=100) and, worse, `fetchAllPages` caps at
+// 20 pages: once a tariff crosses that, the *oldest* entries are silently
+// dropped (results come back newest-first) and history quietly reprices at
+// the FALLBACK_* rates.
+const RATE_PAGE_SIZE = "1500";
+
 /**
- * Fetch standard unit rates (peak rate p/kWh inc VAT). For IOG this is the
- * "expensive" rate that applies outside the off-peak window and outside any
- * dispatch slot. The off-peak rate comes from a separate IOG-specific endpoint
- * — see `getOffPeakRate`.
+ * Build the query string for a rates request. Octopus returns every bucket
+ * *overlapping* the window, including one that started before `period_from`,
+ * so a midnight-UK lookup still finds the off-peak bucket that began at 23:30
+ * the previous day. No margin needed.
+ */
+function rateParams(periodFrom?: Date, periodTo?: Date): URLSearchParams {
+  const params = new URLSearchParams({ page_size: RATE_PAGE_SIZE });
+  if (periodFrom) params.set("period_from", periodFrom.toISOString());
+  if (periodTo) params.set("period_to", periodTo.toISOString());
+  return params;
+}
+
+/**
+ * Fetch standard unit rates (p/kWh inc VAT) covering [periodFrom, periodTo).
+ *
+ * Prefer `getTariffRates()` unless you specifically want this one endpoint:
+ * the current IOG-* products return nothing here and publish flat day/night
+ * rates instead, so calling this directly silently yields no rates for them.
+ * For IOG these are daily time-of-use buckets: the cheap 23:30–05:30 window
+ * and the expensive remainder of the day. Omit both bounds to fetch the
+ * tariff's entire published history.
  */
 export async function getStandardUnitRates(
-  creds: OctopusCredentials
+  creds: OctopusCredentials,
+  periodFrom?: Date,
+  periodTo?: Date
 ): Promise<UnitRate[]> {
-  const url = `${BASE}/products/${creds.productCode}/electricity-tariffs/${creds.tariffCode}/standard-unit-rates/?page_size=100`;
+  const url = `${BASE}/products/${creds.productCode}/electricity-tariffs/${creds.tariffCode}/standard-unit-rates/?${rateParams(periodFrom, periodTo)}`;
   return fetchAllPages<UnitRate, UnitRateResponse>(url, {
     revalidate: TARIFF_TTL,
     tags: ["octopus-rates"],
   }, creds);
 }
 
+/**
+ * Day or night unit rates, used by tariffs that publish two flat rates instead
+ * of half-hourly buckets. Returns `[]` rather than throwing when the tariff
+ * isn't of that kind: standard-rate tariffs reject these endpoints outright
+ * with "This tariff has standard rates, not day and night."
+ *
+ * Deliberately unfiltered by period — these are a handful of open-ended
+ * entries, so fetching the lot keeps historical days priceable for the cost of
+ * one small request.
+ */
+async function getSplitUnitRates(
+  creds: OctopusCredentials,
+  segment: "day" | "night"
+): Promise<UnitRate[]> {
+  const url = `${BASE}/products/${creds.productCode}/electricity-tariffs/${creds.tariffCode}/${segment}-unit-rates/?page_size=100`;
+  try {
+    return await fetchAllPages<UnitRate, UnitRateResponse>(url, {
+      revalidate: TARIFF_TTL,
+      tags: ["octopus-rates"],
+    }, creds);
+  } catch {
+    return [];
+  }
+}
+
+/** Which endpoint family a tariff publishes its unit rates on. */
+export type TariffRateKind = "standard" | "day-night";
+
+export interface TariffRates {
+  kind: TariffRateKind;
+  /** Rate (p/kWh inc VAT) during the expensive part of the day. */
+  peakAt: RateLookup;
+  /** Rate (p/kWh inc VAT) inside the cheap overnight window. */
+  offPeakAt: RateLookup;
+}
+
+/**
+ * Resolve a tariff's unit rates whichever way it publishes them.
+ *
+ * The original IOG product (`INTELLI-VAR-*`) publishes half-hourly time-of-use
+ * buckets on `standard-unit-rates`. The renamed family (`IOG-*`, still
+ * "Intelligent Octopus Go") returns *nothing* from that endpoint and instead
+ * publishes one flat `day-unit-rates` and one flat `night-unit-rates` value.
+ * Asking only the old endpoint yields zero rates and silently falls through to
+ * the FALLBACK_* constants, mispricing every slot by ~10%.
+ *
+ * The two forms are mutually exclusive, so "standard first, day/night if
+ * empty" can't pick the wrong one.
+ */
+export async function getTariffRates(
+  creds: OctopusCredentials,
+  periodFrom?: Date,
+  periodTo?: Date
+): Promise<TariffRates> {
+  const standard = await getStandardUnitRates(creds, periodFrom, periodTo);
+  if (standard.length > 0) {
+    // One array covers both: a midnight lookup lands in the off-peak bucket,
+    // a noon lookup in the peak one.
+    const lookup = buildRateLookup(standard);
+    return { kind: "standard", peakAt: lookup, offPeakAt: lookup };
+  }
+
+  const [day, night] = await Promise.all([
+    getSplitUnitRates(creds, "day"),
+    getSplitUnitRates(creds, "night"),
+  ]);
+  return {
+    kind: "day-night",
+    peakAt: buildRateLookup(day),
+    offPeakAt: buildRateLookup(night),
+  };
+}
+
+/** Standing charges (p/day inc VAT) covering [periodFrom, periodTo). */
 export async function getStandingCharges(
-  creds: OctopusCredentials
+  creds: OctopusCredentials,
+  periodFrom?: Date,
+  periodTo?: Date
 ): Promise<StandingCharge[]> {
-  const url = `${BASE}/products/${creds.productCode}/electricity-tariffs/${creds.tariffCode}/standing-charges/?page_size=100`;
+  const url = `${BASE}/products/${creds.productCode}/electricity-tariffs/${creds.tariffCode}/standing-charges/?${rateParams(periodFrom, periodTo)}`;
   return fetchAllPages<StandingCharge, StandingChargeResponse>(url, {
     revalidate: TARIFF_TTL,
     tags: ["octopus-rates"],
   }, creds);
 }
 
+/** The fields `buildRateLookup` needs — satisfied by both `UnitRate` and
+ *  `StandingCharge`. */
+interface RateWindowSource {
+  valid_from: string;
+  valid_to: string | null;
+  value_inc_vat: number;
+}
+
+/** Resolves the rate (p/kWh or p/day, inc VAT) applicable at a UTC instant. */
+export type RateLookup = (at: Date) => number | null;
+
 /**
- * Returns the rate (p/kWh inc VAT) applicable at the given UTC instant.
- * Picks the entry whose [valid_from, valid_to) interval contains `at`. If
- * `valid_to` is null the entry is open-ended (current).
+ * Pre-parse rate windows into epoch millis once, then resolve instants against
+ * them. The lookup picks the entry whose [valid_from, valid_to) interval
+ * contains `at`; a null `valid_to` means open-ended (current).
+ *
+ * Build this once per range and reuse it for every slot. The previous
+ * per-call version re-parsed both bounds of every entry on every lookup,
+ * which made the yearly view (17.5k slots) CPU-bound.
+ *
+ * Entries are scanned in the order the API returned them, so where two windows
+ * cover the same instant (payment-method variants) the first still wins.
  */
-export function rateAt(rates: { valid_from: string; valid_to: string | null; value_inc_vat: number }[], at: Date): number | null {
-  const t = at.getTime();
-  for (const r of rates) {
-    const from = new Date(r.valid_from).getTime();
-    const to = r.valid_to ? new Date(r.valid_to).getTime() : Infinity;
-    if (t >= from && t < to) return r.value_inc_vat;
-  }
-  return null;
+export function buildRateLookup(rates: RateWindowSource[]): RateLookup {
+  const windows = rates.map((r) => ({
+    from: Date.parse(r.valid_from),
+    to: r.valid_to ? Date.parse(r.valid_to) : Infinity,
+    value: r.value_inc_vat,
+  }));
+  return (at: Date) => {
+    const t = at.getTime();
+    for (const w of windows) {
+      if (t >= w.from && t < w.to) return w.value;
+    }
+    return null;
+  };
+}
+
+/**
+ * One-shot lookup, for callers resolving a couple of instants against a small
+ * array. Inside a loop, build the lookup once with `buildRateLookup` instead.
+ */
+export function rateAt(rates: RateWindowSource[], at: Date): number | null {
+  return buildRateLookup(rates)(at);
 }
 
 // ── Account / agreement helpers ──────────────────────────────────────────────

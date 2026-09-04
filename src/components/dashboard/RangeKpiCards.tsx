@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Zap, Battery, Leaf, TrendingDown, Clock, CalendarDays } from "lucide-react";
-import type { TimeRange } from "@/lib/mock-data";
+import type { TimeRange } from "@/lib/types";
 
 function useAnimatedNumber(target: number, duration = 800) {
   const [value, setValue] = useState(0);

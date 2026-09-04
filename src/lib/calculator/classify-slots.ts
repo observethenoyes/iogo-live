@@ -1,5 +1,5 @@
 import type { ConsumptionReading } from "@/lib/octopus/types";
-import type { CostSlot } from "@/lib/mock-data";
+import type { CostSlot } from "@/lib/types";
 import { isOffPeakWindow, ukLocalHHmm } from "./timezone";
 
 export interface DispatchInterval {

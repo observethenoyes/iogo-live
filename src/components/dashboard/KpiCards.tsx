@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Zap, Battery, Leaf, TrendingDown } from "lucide-react";
-import type { DailySummary } from "@/lib/mock-data";
+import type { DailySummary } from "@/lib/types";
 
 function formatPenceToPounds(pence: number): string {
   return `£${(pence / 100).toFixed(2)}`;

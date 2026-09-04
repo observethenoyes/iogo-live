@@ -1,11 +1,11 @@
 import "server-only";
-import type { CostSlot, DailySummary } from "@/lib/mock-data";
+import type { CostSlot, DailySummary } from "@/lib/types";
 import type { OctopusCredentials } from "@/lib/octopus/types";
 import {
+  buildRateLookup,
   getConsumption,
-  getStandardUnitRates,
   getStandingCharges,
-  rateAt as rateAtRates,
+  getTariffRates,
 } from "@/lib/octopus/rest-client";
 import {
   getDispatches,
@@ -13,6 +13,7 @@ import {
   type ChargingSessionInfo,
 } from "@/lib/octopus/graphql-client";
 import { classifySlots, type DispatchInterval } from "./classify-slots";
+import { evKwhForDay } from "./ev-energy";
 import { addUkDays, todayUkDate, ukDayEnd, ukDayStart } from "./timezone";
 
 // Last-resort fallbacks if the standard-unit-rates endpoint somehow returns
@@ -40,31 +41,6 @@ function totals(slots: CostSlot[]) {
   return { totalCostPence, totalKwh, offPeakKwh, peakKwh, dispatchKwh };
 }
 
-/**
- * Compute charger-reported EV kWh that falls within a single day.
- * Sessions spanning midnight are proportionally split by duration overlap.
- */
-function evKwhForDay(
-  sessions: ChargingSessionInfo[],
-  dayStart: Date,
-  dayEnd: Date
-): number | null {
-  if (sessions.length === 0) return null;
-  let total = 0;
-  let hasAny = false;
-  for (const s of sessions) {
-    const sessStart = Math.max(s.start.getTime(), dayStart.getTime());
-    const sessEnd = Math.min(s.end.getTime(), dayEnd.getTime());
-    if (sessEnd <= sessStart) continue;
-    const overlapMs = sessEnd - sessStart;
-    const totalMs = s.end.getTime() - s.start.getTime();
-    if (totalMs <= 0) continue;
-    total += s.energyAddedKwh * (overlapMs / totalMs);
-    hasAny = true;
-  }
-  return hasAny ? Math.round(total * 100) / 100 : null;
-}
-
 interface BuildOpts {
   /** Per-user Octopus credentials. */
   creds: OctopusCredentials;
@@ -80,8 +56,8 @@ interface BuildOpts {
 
 /**
  * Build a DailySummary for a single UK-local day, talking to the Octopus REST
- * API. Returns the same shape that the existing UI consumes (DailySummary
- * from mock-data.ts).
+ * API. Returns the shape the dashboard consumes (`DailySummary` from
+ * `lib/types.ts`).
  */
 export async function buildDailySummary({
   creds,
@@ -115,11 +91,11 @@ export async function buildDailySummary({
   // Kick off both sources in parallel for recent days so a telemetry
   // failure doesn't force a second round-trip. Use whichever source
   // returns more readings to get the most complete picture.
-  const [restReadings, unitRates, standingCharges, dispatchResult, telemetryResult] =
+  const [restReadings, rates, standingCharges, dispatchResult, telemetryResult] =
     await Promise.all([
       getConsumption(creds, periodFrom, periodTo, isToday),
-      getStandardUnitRates(creds),
-      getStandingCharges(creds),
+      getTariffRates(creds, periodFrom, periodTo),
+      getStandingCharges(creds, periodFrom, periodTo),
       dispatchesPromise,
       isRecent
         ? getTodayTelemetry(creds, periodFrom, periodTo)
@@ -134,28 +110,27 @@ export async function buildDailySummary({
   const dispatches = dispatchResult.dispatches;
   const chargingSessions = dispatchResult.chargingSessions;
 
-  // IOG's standard-unit-rates endpoint publishes time-of-use buckets that
-  // alternate peak ↔ off-peak every day, so we just look up the rate at
-  // instants we know fall inside each window:
-  //   - ukDayStart(date) = midnight UK local → always inside the 23:30–05:30
-  //     off-peak window
-  //   - ukDayStart(date) + 12h = noon UK local → always inside the peak window
-  // This works across BST and GMT without any special-casing.
+  // Probe each rate at an instant we know falls inside its window:
+  //   - ukDayStart(date)       = midnight UK → inside the 23:30-05:30 off-peak
+  //   - ukDayStart(date) + 12h = noon UK     → inside the peak window
+  // Works across BST and GMT with no special-casing, and for a day/night
+  // tariff (flat rates) the probe instant simply doesn't matter.
   const offPeakLookupAt = periodFrom; // midnight UK local
   const peakLookupAt = new Date(periodFrom.getTime() + 12 * HOUR_MS); // noon UK local
+  const standingChargeAt = buildRateLookup(standingCharges);
   const offPeakRate =
-    creds.offPeakRateOverride ?? rateAtRates(unitRates, offPeakLookupAt) ?? FALLBACK_OFF_PEAK_PENCE;
+    creds.offPeakRateOverride ?? rates.offPeakAt(offPeakLookupAt) ?? FALLBACK_OFF_PEAK_PENCE;
   const peakRate =
-    creds.peakRateOverride ?? rateAtRates(unitRates, peakLookupAt) ?? FALLBACK_PEAK_PENCE;
+    creds.peakRateOverride ?? rates.peakAt(peakLookupAt) ?? FALLBACK_PEAK_PENCE;
   const standingChargePence =
-    creds.standingChargeOverride ?? rateAtRates(standingCharges, periodFrom) ?? 0;
+    creds.standingChargeOverride ?? standingChargeAt(periodFrom) ?? 0;
 
   const slots = classifySlots({
     readings,
     dispatches,
     rateAt: creds.peakRateOverride != null
       ? () => creds.peakRateOverride!
-      : (at) => rateAtRates(unitRates, at),
+      : rates.peakAt,
     offPeakRate,
     peakRate,
   });

@@ -2,7 +2,7 @@
 
 import { useRef, useState, useEffect } from "react";
 import { Radio, CalendarDays, CalendarRange, Calendar, CalendarClock } from "lucide-react";
-import type { TimeRange } from "@/lib/mock-data";
+import type { TimeRange } from "@/lib/types";
 
 const RANGES: { value: TimeRange; label: string; icon: React.ReactNode }[] = [
   { value: "live", label: "Live", icon: <Radio size={13} /> },

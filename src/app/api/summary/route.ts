@@ -9,6 +9,7 @@ import {
 import { todayUkDate } from "@/lib/calculator/timezone";
 import { OctopusError } from "@/lib/octopus/rest-client";
 import { getSession, getUserCredentials } from "@/lib/dal";
+import { rateLimit, rateLimitKey } from "@/lib/rate-limit";
 import { supabaseConfigured, octopusEnv, envToCredentials } from "@/lib/env";
 import type { OctopusCredentials } from "@/lib/octopus/types";
 
@@ -40,11 +41,13 @@ export async function GET(request: Request) {
 
   // Resolve credentials: Supabase (multi-user) or env vars (self-hosted).
   let creds: OctopusCredentials;
+  let userId: string | null = null;
   if (supabaseConfigured()) {
     const session = await getSession();
     if (!session) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
+    userId = session.userId;
     const userCreds = await getUserCredentials(session.userId);
     if (!userCreds) {
       return NextResponse.json(
@@ -62,6 +65,21 @@ export async function GET(request: Request) {
       );
     }
     creds = envToCredentials(env);
+  }
+
+  // Throttle before the expensive part. A `yearly` build fans out to a year of
+  // consumption plus 14 Kraken queries, and in self-hosted mode this endpoint
+  // has no auth in front of it at all. Keyed on the user where there is one,
+  // since an IP is spoofable.
+  const { ok, retryAfterSec } = rateLimit(
+    `summary:${rateLimitKey(request.headers, userId)}`,
+    { limit: 30, windowMs: 60_000 }
+  );
+  if (!ok) {
+    return NextResponse.json(
+      { error: "Too many requests. Please wait and try again." },
+      { status: 429, headers: { "Retry-After": String(retryAfterSec) } }
+    );
   }
 
   try {

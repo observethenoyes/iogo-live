@@ -16,7 +16,7 @@ export default function RateDetails({
   const rates = [
     {
       label: "Off-Peak Rate",
-      value: `${offPeakRate}p/kWh`,
+      value: `${offPeakRate.toFixed(2)}p/kWh`,
       time: "23:30 – 05:30",
       color: "#22C55E",
       glowColor: "rgba(34, 197, 94, 0.4)",
@@ -24,7 +24,7 @@ export default function RateDetails({
     },
     {
       label: "Peak Rate",
-      value: `${peakRate}p/kWh`,
+      value: `${peakRate.toFixed(2)}p/kWh`,
       time: "05:30 – 23:30",
       color: "#F97316",
       glowColor: "rgba(249, 115, 22, 0.4)",
@@ -32,7 +32,7 @@ export default function RateDetails({
     },
     {
       label: "Standing Charge",
-      value: `${standingCharge}p/day`,
+      value: `${standingCharge.toFixed(2)}p/day`,
       time: "Daily",
       color: "#64748B",
       glowColor: "rgba(100, 116, 139, 0.3)",

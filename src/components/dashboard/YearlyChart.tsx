@@ -12,7 +12,7 @@ import {
   Legend,
   Area,
 } from "recharts";
-import type { MonthlySummaryCompact } from "@/lib/mock-data";
+import type { MonthlySummaryCompact } from "@/lib/types";
 
 function formatPounds(p: number): string {
   return `£${(p / 100).toFixed(0)}`;

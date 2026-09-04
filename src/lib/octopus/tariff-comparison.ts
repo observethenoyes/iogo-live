@@ -1,6 +1,6 @@
 import "server-only";
 
-import type { CostSlot } from "@/lib/mock-data";
+import type { CostSlot } from "@/lib/types";
 import type { OctopusCredentials } from "./types";
 
 const BASE = "https://api.octopus.energy/v1";

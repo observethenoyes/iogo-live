@@ -12,7 +12,7 @@ import {
   Legend,
   Area,
 } from "recharts";
-import type { DailySummaryCompact } from "@/lib/mock-data";
+import type { DailySummaryCompact } from "@/lib/types";
 
 function formatPence(p: number): string {
   return `£${(p / 100).toFixed(2)}`;

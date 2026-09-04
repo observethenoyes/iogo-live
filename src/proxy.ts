@@ -1,8 +1,20 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createSupabaseProxyClient } from "@/lib/supabase/proxy";
+import { supabaseConfigured } from "@/lib/supabase/config";
 
-const PUBLIC_PATHS = new Set(["/login", "/auth/callback"]);
+const PUBLIC_PATHS = new Set(["/login", "/auth/callback", "/api/health"]);
+
+// PWA assets the browser fetches without (or before) a session — the manifest
+// is often requested anonymously. Redirecting these to /login hands the
+// browser an HTML login page in place of the manifest, which kills the
+// "Add to Home Screen" install prompt on the very page that needs it.
+const PUBLIC_ASSETS = new Set([
+  "/manifest.webmanifest",
+  "/icon-192x192",
+  "/icon-512x512",
+  "/apple-icon",
+]);
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -12,13 +24,16 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.endsWith(".svg") ||
-    pathname.endsWith(".ico")
+    pathname.endsWith(".ico") ||
+    PUBLIC_ASSETS.has(pathname)
   ) {
     return NextResponse.next();
   }
 
-  // Self-hosted mode: no Supabase configured, skip auth entirely.
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  // Self-hosted mode: no Supabase configured, skip auth entirely. Uses the
+  // same predicate as the DAL so the two can't disagree about which mode
+  // we're in.
+  if (!supabaseConfigured()) {
     return NextResponse.next();
   }
 

@@ -53,6 +53,11 @@ export function ukLocalHHmm(at: Date): string {
   return formatInTimeZone(at, UK_TZ, "HH:mm");
 }
 
+/** Format a UTC Date as "11 April 2026" in UK local time. */
+export function ukLocalLongDate(at: Date): string {
+  return formatInTimeZone(at, UK_TZ, "d MMMM yyyy");
+}
+
 /** Format a UTC Date as a long human label like "Sat, 11 Apr 2026" in UK local. */
 export function ukLocalDayLabel(at: Date): string {
   return formatInTimeZone(at, UK_TZ, "EEE, d MMM yyyy");
@@ -67,6 +72,15 @@ export function toUkLocal(at: Date) {
     weekday: zoned.getDay(),
     yyyyMmDd: formatInTimeZone(at, UK_TZ, "yyyy-MM-dd"),
   };
+}
+
+/**
+ * Half-hour slot index (0–47) for a UTC instant, in UK local time.
+ * 00:00–00:29 is 0, 23:30–23:59 is 47.
+ */
+export function ukSlotIndex(at: Date = new Date()): number {
+  const { hour, minute } = toUkLocal(at);
+  return hour * 2 + (minute >= 30 ? 1 : 0);
 }
 
 /**

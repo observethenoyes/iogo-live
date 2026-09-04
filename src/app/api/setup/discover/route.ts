@@ -13,7 +13,7 @@ const DiscoverBodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  const ip = clientIp(request);
+  const ip = clientIp(request.headers);
   const { ok, retryAfterSec } = rateLimit(`discover:${ip}`, {
     limit: 5,
     windowMs: 60_000,

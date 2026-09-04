@@ -47,10 +47,33 @@ export function rateLimit(
   return { ok: true, retryAfterSec: 0 };
 }
 
-export function clientIp(request: Request): string {
-  const xff = request.headers.get("x-forwarded-for");
+/**
+ * Best-effort client IP for rate-limit keying.
+ *
+ * `x-forwarded-for` is client-supplied unless a proxy you control overwrites
+ * it, so a determined caller can rotate this value and sidestep a per-IP
+ * limit. Treat IP keying as friction against casual scripting, not as a
+ * security control — prefer `rateLimitKey()` wherever a real identity exists.
+ * If you front this with nginx/Caddy/Traefik, make sure it *sets* rather than
+ * appends the header.
+ */
+type HeaderLike = { get(name: string): string | null };
+
+export function clientIp(headers: HeaderLike): string {
+  const xff = headers.get("x-forwarded-for");
   if (xff) return xff.split(",")[0].trim();
-  const real = request.headers.get("x-real-ip");
+  const real = headers.get("x-real-ip");
   if (real) return real.trim();
   return "unknown";
+}
+
+/**
+ * Prefer a stable authenticated identity over a spoofable IP. Falls back to
+ * the IP when there's no session (self-hosted mode, or pre-login endpoints).
+ */
+export function rateLimitKey(
+  headers: HeaderLike,
+  userId: string | null
+): string {
+  return userId ? `user:${userId}` : `ip:${clientIp(headers)}`;
 }

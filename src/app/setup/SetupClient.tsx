@@ -902,11 +902,7 @@ function DiscoveryForm({
             <div className="glass-card rounded-2xl p-5">
               <div className="mb-3 flex items-center justify-between">
                 <p className="text-xs font-medium text-muted-foreground">
-                  Drop into{" "}
-                  <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono text-[10px]">
-                    .env.local
-                  </code>{" "}
-                  or Vercel env vars
+                  Your environment variables
                 </p>
                 <button
                   type="button"
@@ -929,10 +925,46 @@ function DiscoveryForm({
               <pre className="max-h-72 overflow-auto rounded-xl border border-white/[0.06] bg-black/40 p-3 text-[11px] leading-relaxed text-muted-foreground">
                 {envBlock}
               </pre>
-              <p className="mt-3 text-[11px] text-muted-foreground">
-                After saving, restart the dev server (or redeploy on Vercel) so
-                the new values take effect.
-              </p>
+              <div className="mt-3 space-y-1.5 text-[11px] text-muted-foreground">
+                <p>Paste these wherever this instance reads its environment:</p>
+                <ul className="ml-3 list-disc space-y-1">
+                  <li>
+                    <strong className="text-foreground">Docker Compose</strong>{" "}
+                    &mdash; into{" "}
+                    <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono">
+                      .env
+                    </code>
+                    , then{" "}
+                    <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono">
+                      docker compose up -d --force-recreate
+                    </code>
+                  </li>
+                  <li>
+                    <strong className="text-foreground">Portainer</strong>{" "}
+                    &mdash; into the stack&rsquo;s Environment variables, then
+                    redeploy the stack
+                  </li>
+                  <li>
+                    <strong className="text-foreground">Local dev</strong>{" "}
+                    &mdash; into{" "}
+                    <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono">
+                      .env.local
+                    </code>
+                    , then restart{" "}
+                    <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono">
+                      npm run dev
+                    </code>
+                  </li>
+                  <li>
+                    <strong className="text-foreground">Vercel</strong> &mdash;
+                    into project environment variables, then redeploy
+                  </li>
+                </ul>
+                <p className="pt-1">
+                  There&rsquo;s no Save button here because single user mode has
+                  no database &mdash; the environment is the store.
+                </p>
+              </div>
             </div>
           )}
         </div>

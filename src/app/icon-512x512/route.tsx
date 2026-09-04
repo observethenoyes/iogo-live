@@ -1,6 +1,8 @@
 import { ImageResponse } from "next/og";
 
-export const runtime = "edge";
+// The icon never varies by request, so prerender it once at build time rather
+// than re-rasterising the PNG on every fetch.
+export const dynamic = "force-static";
 
 export function GET() {
   return new ImageResponse(
