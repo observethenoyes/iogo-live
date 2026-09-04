@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/screenshots/hero.png" alt="IOG Dashboard — daily view" width="700" />
-</p>
-
 <h1 align="center">IOG Dashboard</h1>
 
 <p align="center">
@@ -70,49 +66,81 @@ The Octopus app tells you *how much energy you used*. This tells you *how much i
 
 ---
 
-## Screenshots
+## The views
 
-> Add your own screenshots to `docs/screenshots/` and they'll appear here.
-> Tip: use your browser's responsive mode at 375px for mobile shots.
+- **Daily** — half-hourly consumption colour-coded by rate type, KPI cards, cost breakdown
+- **Live** — today so far, with an animated current-slot indicator
+- **Weekly / monthly / yearly** — cost and kWh trends with per-period KPIs
+- **EV split + tariff comparison** — charger-reported kWh vs household, plus what you'd have paid on Flexible or Agile
+- **Settings** — account overview, live rates, and rate overrides
 
-<table>
-<tr>
-<td width="50%">
-
-**Daily view** — half-hourly consumption colour-coded by rate type, KPI cards, cost breakdown
-
-<img src="docs/screenshots/daily.png" alt="Daily view" width="100%" />
-
-</td>
-<td width="50%">
-
-**Live view** — today so far with animated current-slot indicator
-
-<img src="docs/screenshots/live.png" alt="Live view" width="100%" />
-
-</td>
-</tr>
-<tr>
-<td>
-
-**EV split + tariff comparison** — charger-reported kWh vs household, plus what you'd pay on other tariffs
-
-<img src="docs/screenshots/ev-split.png" alt="EV charging split" width="100%" />
-
-</td>
-<td>
-
-**Settings** — account overview, live rates, and rate overrides
-
-<img src="docs/screenshots/settings.png" alt="Settings page" width="100%" />
-
-</td>
-</tr>
-</table>
+<!-- Screenshots live in docs/screenshots/ (currently empty). Drop in hero.png,
+     daily.png, live.png, ev-split.png and settings.png, then re-add <img> tags
+     here. Your browser's responsive mode at 375px gives good mobile shots. -->
 
 ---
 
-## Quick Start
+## Two ways to run it
+
+The app has two modes and picks one automatically based on the environment variables it finds.
+
+| | **Single user** (default) | **Multi user** (optional) |
+|-|-|-|
+| For | You, on your laptop, NAS, Pi or Docker host | A shared instance for several households |
+| Database | None | Supabase (Postgres) |
+| Login | None | Email magic link |
+| Credentials from | `OCTOPUS_*` environment variables | Encrypted per user in Supabase |
+| Extra setup | None | Supabase project, SQL migrations, encryption key |
+
+**If you're running this locally, in Docker, or as a Portainer stack, you want single user mode. You do not need Supabase, a database, or an account** — just a handful of `OCTOPUS_*` environment variables, and `/setup` works most of them out for you. Everything about Supabase below is optional and safe to ignore.
+
+> ⚠️ **Single user mode has no login.** Anyone who can reach the URL sees your energy data. Keep it on localhost, your home LAN, or behind your own VPN or reverse-proxy auth. Don't port-forward it to the open internet. If you need a public instance, use multi user mode.
+
+---
+
+## Run with Docker
+
+The easiest way to self-host. Single user mode, no database.
+
+### Docker Compose
+
+```bash
+git clone https://github.com/observethenoyes/iogo-live.git
+cd iogo-live
+cp .env.example .env          # fill in OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER
+docker compose up -d --build
+```
+
+Open [localhost:3000/setup](http://localhost:3000/setup). It discovers your MPAN, meter serial and tariff codes from the Octopus API and shows you a block of environment variables. Paste those into `.env`, then:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+Open [localhost:3000](http://localhost:3000) and you're running.
+
+### Portainer stack
+
+`docker-compose.yml` builds from source, so use the **Repository** method rather than pasting into the web editor (the editor has no build context).
+
+1. **Stacks → Add stack → Repository**
+2. Repository URL: `https://github.com/observethenoyes/iogo-live`
+3. Compose path: `docker-compose.yml`
+4. Under **Environment variables**, add:
+
+   | Name | Value |
+   |------|-------|
+   | `OCTOPUS_API_KEY` | `sk_live_...` |
+   | `OCTOPUS_ACCOUNT_NUMBER` | `A-XXXXXXXX` |
+
+5. **Deploy the stack**, then open `http://<host>:3000/setup`
+6. Add the four values `/setup` discovers (`OCTOPUS_MPAN`, `OCTOPUS_METER_SERIAL`, `OCTOPUS_PRODUCT_CODE`, `OCTOPUS_TARIFF_CODE`) to the same stack environment variables and redeploy
+
+The compose file also accepts the three optional rate overrides. Anything you leave unset falls back to the live Octopus rates.
+
+---
+
+## Quick Start (local development)
 
 ### 1. Clone and install
 
@@ -141,31 +169,51 @@ OCTOPUS_ACCOUNT_NUMBER=A-XXXXXXXX
 npm run dev
 ```
 
-Open [localhost:3000/setup](http://localhost:3000/setup). The app will auto-discover your meter details from the Octopus API — MPAN, serial number, tariff code, current rates. Hit save and you're done.
+The dashboard needs six `OCTOPUS_*` values, so with only two set it sends you to [/setup](http://localhost:3000/setup). That page reads your account from the Octopus API and works out the other four (MPAN, meter serial, product code, tariff code), along with your current rates.
 
-> **Prefer manual config?** You can skip `/setup` and fill in all six env vars yourself. See [Environment Variables](#environment-variables) below.
+In single user mode `/setup` gives you a **copyable block of environment variables** rather than a save button — there's no database to save them to. Paste the block into `.env.local`, restart `npm run dev`, and open [localhost:3000](http://localhost:3000).
+
+> In multi user mode the same page shows a **Save** button instead, because credentials go to Supabase against your account.
+
+> **Prefer manual config?** Skip `/setup` and fill in all six variables yourself. See [Environment Variables](#environment-variables) below.
 
 ---
 
-## Deploy to the Cloud
+## Other ways to deploy
 
-### Vercel (easiest)
+### Vercel
 
 1. Fork this repo
 2. Import it on [vercel.com/new](https://vercel.com/new)
-3. Add your `OCTOPUS_API_KEY` and `OCTOPUS_ACCOUNT_NUMBER` as environment variables
-4. Deploy
+3. Add `OCTOPUS_API_KEY` and `OCTOPUS_ACCOUNT_NUMBER` as environment variables, then deploy
+4. Open `/setup`, copy the four discovered values into your Vercel environment variables, and redeploy
 
-All API calls happen server-side. Your API key never reaches the browser.
+All Octopus calls happen server-side. Your API key never reaches the browser.
+
+Remember that a Vercel deployment is a public URL. In single user mode that means public access to your energy data — use multi user mode for anything you don't want open.
 
 ### Any Node.js host
 
-```bash
-npm run build
-npm start        # runs on port 3000
+Requires **Node 20.9 or newer** (a Next.js 16 requirement).
+
+`next.config.ts` sets `output: "standalone"` so the Docker image can ship a self-contained server. A side effect is that `npm start` does **not** work:
+
+```
+⚠ "next start" does not work with "output: standalone" configuration.
+  Use "node .next/standalone/server.js" instead.
 ```
 
-Works on any platform that runs Node 18+ — Railway, Fly.io, a Raspberry Pi, whatever you like.
+The standalone server needs the static assets copied beside it:
+
+```bash
+npm ci
+npm run build
+cp -r public .next/standalone/
+cp -r .next/static .next/standalone/.next/
+node .next/standalone/server.js      # honours PORT and HOSTNAME, defaults to 3000
+```
+
+Fine on Railway, Fly.io, a Raspberry Pi, or anything else on Node 20.9+. If you only ever deploy to a bare Node host and want plain `npm start` back, drop `output: "standalone"` from `next.config.ts` — but the Dockerfile depends on it.
 
 ---
 
@@ -224,19 +272,38 @@ Set custom peak, off-peak, or standing charge rates from the settings page. Usef
 
 ## Environment Variables
 
+### Single user mode
+
+This is all you need for local, Docker or Portainer use.
+
 | Variable | Required | Description |
 |----------|:--------:|-------------|
 | `OCTOPUS_API_KEY` | Yes | Your Octopus API key (`sk_live_...`). [Find it here.](https://octopus.energy/dashboard/new/accounts/personal-details/api-access) |
 | `OCTOPUS_ACCOUNT_NUMBER` | Yes | Your account number (`A-XXXXXXXX`), shown on your Octopus dashboard. |
-| `OCTOPUS_MPAN` | Auto | 13-digit meter point number. Auto-discovered via `/setup`. |
-| `OCTOPUS_METER_SERIAL` | Auto | Meter serial number. Auto-discovered via `/setup`. |
-| `OCTOPUS_PRODUCT_CODE` | Auto | e.g. `INTELLI-VAR-22-10-14`. Auto-discovered via `/setup`. |
-| `OCTOPUS_TARIFF_CODE` | Auto | e.g. `E-1R-INTELLI-VAR-22-10-14-A`. Auto-discovered via `/setup`. |
-| `OCTOPUS_PEAK_RATE_OVERRIDE` | No | Custom peak rate in p/kWh (overrides API rate). |
-| `OCTOPUS_OFF_PEAK_RATE_OVERRIDE` | No | Custom off-peak rate in p/kWh. |
-| `OCTOPUS_STANDING_CHARGE_OVERRIDE` | No | Custom standing charge in p/day. |
+| `OCTOPUS_MPAN` | Yes | 13-digit meter point number. Discovered for you by `/setup`. |
+| `OCTOPUS_METER_SERIAL` | Yes | Meter serial number. Discovered for you by `/setup`. |
+| `OCTOPUS_PRODUCT_CODE` | Yes | e.g. `INTELLI-VAR-22-10-14`. Discovered for you by `/setup`. |
+| `OCTOPUS_TARIFF_CODE` | Yes | e.g. `E-1R-INTELLI-VAR-22-10-14-A`. Discovered for you by `/setup`. |
+| `OCTOPUS_PEAK_RATE_OVERRIDE` | No | Custom peak rate in p/kWh (inc VAT). Overrides the API rate. |
+| `OCTOPUS_OFF_PEAK_RATE_OVERRIDE` | No | Custom off-peak rate in p/kWh (inc VAT). |
+| `OCTOPUS_STANDING_CHARGE_OVERRIDE` | No | Custom standing charge in p/day (inc VAT). |
 
-> Variables marked **Auto** are discovered automatically when you use the `/setup` page. You only need to set them manually if you're skipping the setup UI.
+All six of the required variables must be present, or the app redirects to `/setup`. Set the first two yourself; `/setup` works out the other four and hands you a block to paste in.
+
+### Multi user mode (optional)
+
+Set these **instead of** the `OCTOPUS_*` variables. Each user then stores their own credentials via `/setup`.
+
+| Variable | Required | Description |
+|----------|:--------:|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL, e.g. `https://xxxx.supabase.co`. |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Supabase anon/public key. Multi user mode only switches on when **both** this and the URL are set. |
+| `SUPABASE_ENCRYPTION_KEY` | Yes | 64 hex characters (32 bytes). Encrypts each user's Octopus API key at rest. Generate with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
+| `ALLOWED_EMAILS` | No | Comma-separated sign-in allowlist, e.g. `me@example.com,partner@example.com`. Supabase sign-up is open by default, so without this anyone who reaches your instance can create an account. |
+
+You also need to apply the SQL in `supabase/migrations/` to your Supabase project. It creates the `user_credentials` table with row-level security so users can only read their own row.
+
+> **Multi user mode and Docker don't mix cleanly.** `NEXT_PUBLIC_*` variables are inlined into the browser bundle at build time, not read at runtime, so passing them to a prebuilt container is partly ineffective: server-side auth works, but the sign-out button never renders. If you want multi user mode in Docker, pass them as build args and rebuild the image. On Vercel it just works, because the build happens after you set the variables.
 
 ---
 
@@ -303,11 +370,11 @@ The dashboard specifically targets IOG's rate structure (off-peak window, dispat
 <details>
 <summary><strong>Is my API key safe?</strong></summary>
 
-In **self-hosted mode**, your API key lives in `.env.local` on your server and is only used for server-side API calls. It never reaches the browser.
+In **single user mode**, your API key lives in an environment variable on your own machine or container (`.env.local` for `npm run dev`, `.env` or your Portainer stack variables for Docker). It's only ever used for server-side API calls and never reaches the browser.
 
-> **Heads-up on self-hosted mode:** when no Supabase is configured, the app treats every visitor as a single implicit user and does **not** require login. Only expose a self-hosted instance on a network you control (localhost, home LAN, or behind your own VPN/reverse-proxy auth). To deploy publicly, set `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` and `SUPABASE_ENCRYPTION_KEY` to enable multi-user auth.
+> **Heads-up on single user mode:** with no Supabase configured, the app treats every visitor as one implicit user and does **not** require a login. Only expose such an instance on a network you control (localhost, home LAN, or behind your own VPN or reverse-proxy auth). To deploy publicly, switch to multi user mode.
 
-In **multi-user mode**, API keys are encrypted with AES-256-GCM before being stored in Supabase. The encryption key only exists in your server's environment variables. Even a full database breach wouldn't expose plaintext API keys.
+In **multi user mode**, API keys are encrypted with AES-256-GCM before being stored in Supabase. The encryption key only exists in your server's environment variables. Even a full database breach wouldn't expose plaintext API keys.
 
 </details>
 
@@ -337,6 +404,8 @@ A few reasons:
 | Auth | [Supabase Auth](https://supabase.com/auth) (optional, magic link) |
 | Database | Supabase PostgreSQL + RLS (optional) |
 | Encryption | Node.js `crypto` (AES-256-GCM) |
+| Containers | Docker multi-stage build, non-root, `output: standalone` |
+| Tests | [Vitest](https://vitest.dev) + GitHub Actions CI |
 
 ---
 
@@ -344,13 +413,19 @@ A few reasons:
 
 ```
 src/
+  proxy.ts                   # Auth gate + public asset bypass (Next 16 proxy)
   app/
-    page.tsx                # Dashboard (server component)
-    setup/                  # Account setup & settings
-    login/                  # Magic link login (multi-user)
-    api/summary/            # Range data endpoint (weekly/monthly/yearly)
-    api/setup/discover/     # Account auto-discovery
-    manifest.ts             # PWA manifest
+    page.tsx                 # Dashboard (server component)
+    error.tsx                # Error boundary
+    setup/                   # Account setup & settings
+    login/                   # Magic link login (multi user)
+    auth/callback/           # Magic link exchange
+    actions/                 # Server actions (auth, credentials)
+    api/summary/             # Range data endpoint (weekly/monthly/yearly)
+    api/setup/discover/      # Account auto-discovery
+    api/health/              # Liveness probe for the container healthcheck
+    manifest.ts              # PWA manifest
+    icon-*/, apple-icon.tsx  # Generated PWA icons
   components/dashboard/
     Dashboard.tsx            # Main client orchestrator
     ConsumptionChart.tsx     # Half-hourly bar chart
@@ -363,19 +438,29 @@ src/
     EvChargingSplit.tsx      # EV vs household during dispatch
     DispatchTimeline.tsx     # Smart charge slot list
     TariffExpiryBanner.tsx   # Renewal warning banner
+    KpiCards.tsx, RangeKpiCards.tsx, RateDetails.tsx,
+    DateNavigator.tsx, TimeRangeSelector.tsx
   lib/
     octopus/
-      rest-client.ts         # Octopus REST API
-      graphql-client.ts      # Kraken GraphQL API
+      rest-client.ts         # Octopus REST API (consumption, rates)
+      graphql-client.ts      # Kraken GraphQL (telemetry, dispatches, sessions)
+      account-discovery.ts   # Meter/tariff discovery for /setup
       tariff-comparison.ts   # Public tariff rate fetcher
+      types.ts               # Credentials + raw API shapes
     calculator/
       calculate-daily.ts     # Single-day builder
       calculate-range.ts     # Multi-day aggregation
       classify-slots.ts      # Off-peak/peak/dispatch classifier
-      timezone.ts            # UK timezone utilities
-    dal.ts                   # Data access layer
+      ev-energy.ts           # Charger-reported kWh apportioned per day
+      timezone.ts            # UK timezone utilities (BST/GMT safe)
+    supabase/
+      server.ts, proxy.ts    # SSR clients (multi user)
+      config.ts              # Shared "is Supabase configured?" check
+    dal.ts                   # Session + credential access layer
     crypto.ts                # AES-256-GCM encryption
     env.ts                   # Environment helpers
+    rate-limit.ts            # Per-process sliding window limiter
+    types.ts                 # Shared summary types
 ```
 
 ---
@@ -389,9 +474,16 @@ git clone https://github.com/observethenoyes/iogo-live.git
 cd iogo-live
 npm install
 npm run dev          # dev server with Turbopack
-npm run build        # production build + type check
+npm test             # Vitest unit tests
+npm run test:watch   # ...in watch mode
+npm run typecheck    # tsc --noEmit
 npm run lint         # ESLint
+npm run build        # production build
 ```
+
+CI runs lint, typecheck, tests, build and a production `npm audit` on every push and pull request.
+
+The unit tests cover the pure logic where a mistake is expensive and invisible: UK timezone handling across BST and GMT boundaries, slot classification and pricing, rate-window lookup, and EV energy apportioning. Anything that talks to the Octopus API is left to manual testing against a real account.
 
 If you're adding a new feature, please open an issue first to discuss the approach.
 
